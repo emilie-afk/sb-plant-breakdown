@@ -95,7 +95,8 @@
     <label>Snapshot</label><select id="amazon-snap-select"></select>
     <label>vs Compare</label><select id="amazon-compare-select"></select>
     <div class="right">
-      <button class="tab" id="amazon-download">⬇ Download clean data</button>
+      <button class="tab" id="amazon-download">⬇ Clean data</button>
+      <button class="tab" id="amazon-download-breakdown">⬇ Breakdown (genus + all plants)</button>
     </div>
   </div>
   <div class="dropzone" id="amazon-dropzone">
@@ -152,7 +153,8 @@
     <label>Snapshot</label><select id="shopify-snap-select"></select>
     <label>vs Compare</label><select id="shopify-compare-select"></select>
     <div class="right">
-      <button class="tab" id="shopify-download">⬇ Download clean data</button>
+      <button class="tab" id="shopify-download">⬇ Clean data</button>
+      <button class="tab" id="shopify-download-breakdown">⬇ Breakdown (genus + all plants)</button>
     </div>
   </div>
   <div class="dropzone" id="shopify-dropzone">
@@ -197,15 +199,19 @@
   <div class="picker">
     <label>Amazon</label><select id="cross-amazon-select"></select>
     <label>Shopify</label><select id="cross-shopify-select"></select>
+    <div class="right"><button class="tab" id="cross-download">⬇ Download cross-channel</button></div>
   </div>
   <div class="banner" id="cross-banner"></div>
   <div id="cross-empty" class="empty" style="display:block">Upload at least one Amazon and one Shopify snapshot to see the cross-channel comparison.</div>
   <div id="cross-content" style="display:none">
+    <div class="panel" id="cross-overlap-box" style="background:#fff8e1;border-color:#ffe082;font-size:13px;display:none"></div>
     <div class="grid cards" id="cross-cards"></div>
     <div class="panel">
       <div class="panel-h"><h2>Top 25 genera — channel split</h2></div>
       <div class="chart-box"><canvas id="cross-chart"></canvas></div>
     </div>
+    <div class="panel" id="cross-drill" style="display:none"></div>
+    <div class="panel" id="cross-opportunities" style="display:none"></div>
     <div class="panel">
       <div class="panel-h"><h2>Channel preference <span class="pill" id="cross-count"></span></h2></div>
       <div class="filterbar"><input id="cross-search" placeholder="Search genus…"></div>
