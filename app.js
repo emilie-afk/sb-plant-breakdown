@@ -68,27 +68,63 @@ function labelFromDates(start, end){
   if (sy === ey) return `${months[sm-1]}–${months[em-1]} ${sy}`;
   return `${start} to ${end}`;
 }
-function parseAmazon(rows){
+function parseAmazon(rows, ws){
   const products = [];
+  function asinFromCell(cellRef){
+    const c = ws[cellRef];
+    if (!c) return "";
+    // HYPERLINK formula: look at f for ASIN
+    if (c.f){
+      const m = c.f.match(/[A-Z0-9]{10}/g);
+      if (m && m.length) return m[m.length - 1];
+    }
+    // Or the cell's raw value / display might contain it
+    for (const k of ['v','w','h']){
+      if (c[k] && typeof c[k] === 'string'){
+        const m = c[k].match(/\b[A-Z0-9]{10}\b/);
+        if (m) return m[0];
+      }
+    }
+    return "";
+  }
+  function num(x){
+    if (typeof x === 'number') return x;
+    if (x == null || x === '') return 0;
+    const s = String(x).replace(/[,$\s%]/g, '');
+    const n = parseFloat(s);
+    return isNaN(n) ? 0 : n;
+  }
   for (let i = 1; i < rows.length; i++){
-    const r = rows[i]; if (!r || !r[0]) continue;
-    let asinCell = String(r[0]); if (asinCell === "Total") continue;
-    const asinMatch = asinCell.match(/[A-Z0-9]{10}/);
-    const asin = asinMatch ? asinMatch[0] : "";
-    const title = String(r[1] || "").trim(); if (!title) continue;
-    const glance = +r[2] || 0, conv = +r[3] || 0, units = +r[4] || 0;
-    const avg = +r[5] || 0, rev = +r[6] || 0, inv = +r[7] || 0;
+    const r = rows[i]; if (!r) continue;
+    // Skip the Shopify-style 'Total' summary row Amazon also has at row index 1
+    if (String(r[0] || '').trim() === "Total") continue;
+    const title = String(r[1] || "").trim();
+    if (!title || title === "Item name") continue;
+    const cellRef = XLSX.utils.encode_cell({c: 0, r: i});
+    const asin = asinFromCell(cellRef) || String(r[0] || '').trim();
+    let glance = num(r[2]);
+    let conv   = num(r[3]);
+    if (conv > 1) conv = conv / 100; // if stored as 2.98 instead of 0.0298
+    const units = num(r[4]), avg = num(r[5]), rev = num(r[6]), inv = num(r[7]);
     products.push({asin, title, glance, conv, units, avg, rev, inv, genus: detectGenus(title) || "(no genus)"});
   }
   return products;
 }
 function parseShopify(rows){
+  function num(x){
+    if (typeof x === 'number') return x;
+    if (x == null || x === '') return 0;
+    const s = String(x).replace(/[,$\s%]/g, '');
+    const n = parseFloat(s);
+    return isNaN(n) ? 0 : n;
+  }
   const products = [];
   for (let i = 1; i < rows.length; i++){
-    const r = rows[i]; if (!r || !r[0]) continue;
-    const title = String(r[0]).trim(); if (!title || title === "Total") continue;
-    const units = +r[3] || 0, gross = +r[4] || 0, disc = +r[5] || 0;
-    const ret = +r[6] || 0, net = +r[7] || 0, rev = +r[9] || 0;
+    const r = rows[i]; if (!r) continue;
+    const title = String(r[0] || '').trim();
+    if (!title || title === "Total" || title === "Product title") continue;
+    const units = num(r[3]), gross = num(r[4]), disc = num(r[5]);
+    const ret = num(r[6]), net = num(r[7]), rev = num(r[9]);
     products.push({asin: "", title, units, gross, disc, ret, net, rev, avg: units ? rev/units : 0, glance: 0, conv: 0, inv: 0, genus: detectGenus(title) || "(no genus)"});
   }
   return products;
@@ -101,8 +137,8 @@ async function handleFile(source, file){
   try {
     const wb = await readFile(file);
     const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(ws, {header: 1, raw: false, defval: ""});
-    const products = source === "amazon" ? parseAmazon(rows) : parseShopify(rows);
+    const rows = XLSX.utils.sheet_to_json(ws, {header: 1, raw: true, defval: ""});
+    const products = source === "amazon" ? parseAmazon(rows, ws) : parseShopify(rows);
     if (!products.length) { alert("No data rows found in file."); return; }
     const [start, end] = parseDates(file.name);
     const startDate = start || new Date().toISOString().slice(0,10);
