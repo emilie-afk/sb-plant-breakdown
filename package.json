@@ -1,0 +1,12 @@
+{
+  "name": "sb-amazon-analyzer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Succulents Box sales breakdown analyzer (encrypted via StatiCrypt at Netlify build time).",
+  "scripts": {
+    "build": "bash build.sh"
+  },
+  "devDependencies": {
+    "staticrypt": "^3.5.4"
+  }
+}
