@@ -878,23 +878,18 @@ function renderCross(){
   // Table
   const tbody = document.getElementById("cross-tbody");
   const thead = document.getElementById("cross-thead");
-  if (overlap){
-    const overlapCols = ['Genus','Amazon $','Other Shopify $','Shopify total $','Amazon share of Shopify'];
-    const overlapKeys = ['genus','aRev','sNonAmazon','sRev','aShare'];
-    thead.innerHTML = overlapCols.map((c,i) => {
-      const isActive = state.crossSort.col === i;
-      const arrow = isActive ? (state.crossSort.dir === 'desc' ? ' ▼' : ' ▲') : '';
-      return `<th data-sort-col="${i}" class="${i===0?'':'num'}" style="cursor:pointer">${c}${arrow}</th>`;
-    }).join('');
-  } else {
-    const splitCols = ['Genus','Amazon $','Shopify $','Combined $','Amazon share','Dominant'];
-    const splitKeys = ['genus','aRev','sRev','combined','aShare','dominantSort'];
-    thead.innerHTML = splitCols.map((c,i) => {
-      const isActive = state.crossSort.col === i;
-      const arrow = isActive ? (state.crossSort.dir === 'desc' ? ' ▼' : ' ▲') : '';
-      return `<th data-sort-col="${i}" class="${i===0?'':'num'}" style="cursor:pointer">${c}${arrow}</th>`;
-    }).join('');
-  }
+  const overlapKeys = ['genus','aRev','sNonAmazon','sRev','aShare'];
+  const splitKeys   = ['genus','aRev','sRev','combined','aShare','dominantSort'];
+  const cols = overlap
+    ? ['Genus','Amazon $','Other Shopify $','Shopify total $','Amazon share of Shopify']
+    : ['Genus','Amazon $','Shopify $','Combined $','Amazon share','Dominant'];
+  // Clamp the sort column if user previously sorted a column that doesn't exist in this mode
+  if (state.crossSort.col >= cols.length) state.crossSort.col = 3;
+  thead.innerHTML = cols.map((c,i) => {
+    const isActive = state.crossSort.col === i;
+    const arrow = isActive ? (state.crossSort.dir === 'desc' ? ' ▼' : ' ▲') : '';
+    return `<th data-sort-col="${i}" class="${i===0?'':'num'}" style="cursor:pointer">${c}${arrow}</th>`;
+  }).join('');
   const q = (document.getElementById("cross-search").value || '').trim().toLowerCase();
   let display = plant.slice();
   if (q) display = display.filter(g => g.genus.toLowerCase().includes(q));
