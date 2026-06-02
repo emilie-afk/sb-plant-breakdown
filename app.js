@@ -5,6 +5,9 @@ const STORAGE_KEY = "sb-analyzer-snapshots-v1";
 let snapshots = loadSnapshots();
 let activeTab = "amazon";
 let state = {
+  crossSort: {col: 3, dir: 'desc'},   // column index, direction
+  genusSort: {amazon: {col: 5, dir: 'desc'}, shopify: {col: 3, dir: 'desc'}},
+  drillSort: {amazon: {col: 7, dir: 'desc'}, shopify: {col: 4, dir: 'desc'}},
   amazon: { snapshotId: null, mode: "single", compareId: null, drillGenus: null, drillFilter: "ge100", alertTab: "oos", chart: null },
   shopify: { snapshotId: null, mode: "single", compareId: null, drillGenus: null, drillFilter: "ge100", chart: null },
   cross:   { amazonId: null, shopifyId: null, chart: null }
@@ -140,13 +143,17 @@ async function handleFile(source, file){
     const rows = XLSX.utils.sheet_to_json(ws, {header: 1, raw: true, defval: ""});
     const products = source === "amazon" ? parseAmazon(rows, ws) : parseShopify(rows);
     if (!products.length) { alert("No data rows found in file."); return; }
-    const [start, end] = parseDates(file.name);
-    const startDate = start || new Date().toISOString().slice(0,10);
-    const endDate = end || startDate;
-    const label = labelFromDates(startDate, endDate);
+    let [start, end] = parseDates(file.name);
+    if (!start) {
+      // Filename doesn't include a date range — prompt the user
+      const period = await promptForPeriod(source, file.name);
+      if (!period) return;  // user cancelled
+      start = period.start; end = period.end;
+    }
+    const label = labelFromDates(start, end);
     const snap = {
-      id: `${source}_${startDate}_${endDate}`,
-      source, label, startDate, endDate,
+      id: `${source}_${start}_${end}`,
+      source, label, startDate: start, endDate: end,
       fileName: file.name,
       uploadedAt: new Date().toISOString(),
       products
@@ -161,6 +168,100 @@ async function handleFile(source, file){
   } finally {
     dz.classList.remove("loading"); dz.querySelector(".dz-msg").textContent = "📂 Drop file here, or click to browse";
   }
+}
+
+function promptForPeriod(source, filename, defaults){
+  // Modal-style prompt for start/end dates. Returns {start, end} or null.
+  return new Promise(resolve => {
+    const today = new Date().toISOString().slice(0,10);
+    const yearStart = today.slice(0,4) + '-01-01';
+    const defStart = (defaults && defaults.start) || yearStart;
+    const defEnd   = (defaults && defaults.end)   || today;
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.style.display = 'flex';
+    modal.innerHTML = `
+      <div class="modal-box" style="max-width:480px">
+        <h2>Set the period for this ${source} file</h2>
+        <p class="small">The filename <code>${filename || ''}</code> doesn't include a date range, so please pick the period this file covers.</p>
+        <div style="margin:14px 0">
+          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px">Start date</label>
+          <input type="date" id="prompt-start" value="${defStart}" style="padding:8px;border:1px solid var(--border);border-radius:6px;font-size:14px;width:100%">
+        </div>
+        <div style="margin:14px 0">
+          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px">End date</label>
+          <input type="date" id="prompt-end" value="${defEnd}" style="padding:8px;border:1px solid var(--border);border-radius:6px;font-size:14px;width:100%">
+        </div>
+        <div class="small" style="margin-top:8px">
+          Quick presets:
+          <a href="#" data-preset="ytd" style="margin-left:6px">YTD</a>
+          · <a href="#" data-preset="month">This month</a>
+          · <a href="#" data-preset="lastmonth">Last month</a>
+          · <a href="#" data-preset="lastyear">Last year (full)</a>
+        </div>
+        <div class="right" style="margin-top:18px">
+          <button class="tab" id="prompt-cancel">Cancel</button>
+          <button id="prompt-ok" style="margin-left:6px">Save period</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    const cleanup = (val) => { modal.remove(); resolve(val); };
+    modal.querySelector('#prompt-cancel').onclick = () => cleanup(null);
+    modal.querySelector('#prompt-ok').onclick = () => {
+      const s = modal.querySelector('#prompt-start').value;
+      const e = modal.querySelector('#prompt-end').value;
+      if (!s || !e) { alert('Please pick both a start and end date.'); return; }
+      if (s > e) { alert('Start date must be before end date.'); return; }
+      cleanup({start: s, end: e});
+    };
+    modal.addEventListener('click', e => { if (e.target === modal) cleanup(null); });
+    modal.querySelectorAll('[data-preset]').forEach(a => a.onclick = ev => {
+      ev.preventDefault();
+      const t = new Date();
+      const today = t.toISOString().slice(0,10);
+      const y = t.getFullYear();
+      const m = t.getMonth();
+      let s, e;
+      if (a.dataset.preset === 'ytd') { s = `${y}-01-01`; e = today; }
+      else if (a.dataset.preset === 'month') {
+        s = `${y}-${String(m+1).padStart(2,'0')}-01`; e = today;
+      } else if (a.dataset.preset === 'lastmonth') {
+        const lm = new Date(y, m-1, 1);
+        const lme = new Date(y, m, 0);
+        s = lm.toISOString().slice(0,10); e = lme.toISOString().slice(0,10);
+      } else if (a.dataset.preset === 'lastyear') {
+        s = `${y-1}-01-01`; e = `${y-1}-12-31`;
+      }
+      modal.querySelector('#prompt-start').value = s;
+      modal.querySelector('#prompt-end').value = e;
+    });
+  });
+}
+
+async function editSnapshotPeriod(id){
+  const snap = snapshots.find(s => s.id === id);
+  if (!snap) return;
+  const period = await promptForPeriod(snap.source, snap.fileName, {start: snap.startDate, end: snap.endDate});
+  if (!period) return;
+  // Delete the old, save with updated id/label/dates (keep the same products)
+  snapshots = snapshots.filter(s => s.id !== id);
+  const newSnap = {
+    ...snap,
+    id: `${snap.source}_${period.start}_${period.end}`,
+    startDate: period.start, endDate: period.end,
+    label: labelFromDates(period.start, period.end)
+  };
+  snapshots.push(newSnap);
+  saveSnapshots();
+  // Update any active state pointers
+  for (const src of ['amazon','shopify']) {
+    if (state[src].snapshotId === id) state[src].snapshotId = newSnap.id;
+    if (state[src].compareId === id) state[src].compareId = newSnap.id;
+  }
+  if (state.cross.amazonId === id) state.cross.amazonId = newSnap.id;
+  if (state.cross.shopifyId === id) state.cross.shopifyId = newSnap.id;
+  openManage();
+  renderTab(activeTab);
 }
 
 // ============================================================
@@ -220,6 +321,10 @@ const fmt$ = v => '$' + (Math.abs(v||0)).toLocaleString('en-US',{minimumFraction
 const fmt$signed = v => (v >= 0 ? '+' : '-') + '$' + Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmtN = v => (v||0).toLocaleString('en-US');
 const pctFmt = v => (v*100).toFixed(2) + '%';
+function fmtAxis(v){
+  if (v >= 1000) return '$' + (v/1000).toFixed(v >= 10000 ? 0 : 1) + 'k';
+  return '$' + Math.round(v);
+}
 function arrow(pct){
   if (pct > 0.005) return '<span class="up">▲</span>';
   if (pct < -0.005) return '<span class="down">▼</span>';
@@ -336,7 +441,7 @@ function renderChart(source, genera){
     data:{labels: items.map(g=>g.genus), datasets:[{data: items.map(g=>g.rev), backgroundColor:'#2e7d32'}]},
     options:{indexAxis:'y', responsive:true, maintainAspectRatio:false,
       plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>fmt$(c.parsed.x)}}},
-      scales:{x:{ticks:{callback:v=>'$'+(v/1000).toFixed(0)+'k'}}}}
+      scales:{x:{ticks:{callback:fmtAxis}}}}
   });
 }
 function renderChartCompare(source, genera){
@@ -351,7 +456,7 @@ function renderChartCompare(source, genera){
     ]},
     options:{indexAxis:'y', responsive:true, maintainAspectRatio:false,
       plugins:{legend:{display:true, position:'bottom'}, tooltip:{callbacks:{label:c=>c.dataset.label+': '+fmt$(c.parsed.x)}}},
-      scales:{x:{ticks:{callback:v=>'$'+(v/1000).toFixed(0)+'k'}}}}
+      scales:{x:{ticks:{callback:fmtAxis}}}}
   });
 }
 
@@ -359,15 +464,32 @@ function renderGenusTable(source, genera, isCompare){
   const isAmazon = source === "amazon";
   const tbody = document.getElementById(`${source}-genus-tbody`);
   const thead = document.getElementById(`${source}-genus-thead`);
-  let cols;
+  let cols, keys;
   if (isCompare){
     cols = ['Genus','SKUs','Units (cur)','Units (prior)','Revenue (cur)','Revenue (prior)','Δ $','Δ %'];
+    keys = ['genus','skus','ci','pi','ct','pt','d','pct'];
   } else if (isAmazon){
     cols = ['Genus','SKUs','Glance','Units','Conv','Revenue','Inventory'];
+    keys = ['genus','skus','glance','units','conv','rev','inv'];
   } else {
     cols = ['Genus','SKUs','Units','Revenue','Avg price'];
+    keys = ['genus','skus','units','rev','avgPrice'];
   }
-  thead.innerHTML = cols.map((c,i) => `<th class="${i===0?'':'num'}">${c}</th>`).join('');
+  if (!state.genusSort[source]) state.genusSort[source] = {col: cols.length - 1, dir: 'desc'};
+  const sortRef = state.genusSort[source];
+  thead.innerHTML = cols.map((c,i) => {
+    const a = sortRef.col === i ? (sortRef.dir === 'desc' ? ' ▼' : ' ▲') : '';
+    return `<th data-gs="${i}" class="${i===0?'':'num'}" style="cursor:pointer">${c}${a}</th>`;
+  }).join('');
+  // Sort genera by chosen key before rendering
+  const key = keys[sortRef.col] || keys[cols.length - 1];
+  genera = genera.slice().sort((a,b) => {
+    let av = a[key], bv = b[key];
+    if (typeof av === 'string'){ av=av.toLowerCase(); bv=(bv||'').toLowerCase(); }
+    if (av < bv) return sortRef.dir === 'desc' ? 1 : -1;
+    if (av > bv) return sortRef.dir === 'desc' ? -1 : 1;
+    return 0;
+  });
   const q = (document.getElementById(`${source}-genus-search`).value || '').trim().toLowerCase();
   let list = genera.slice();
   if (q) list = list.filter(g => g.genus.toLowerCase().includes(q));
@@ -389,6 +511,13 @@ function renderGenusTable(source, genera, isCompare){
   }).join('');
   tbody.querySelectorAll('tr').forEach(tr =>
     tr.addEventListener('click', () => openDrill(source, tr.dataset.genus)));
+  thead.querySelectorAll('[data-gs]').forEach(th => th.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    const col = +th.dataset.gs;
+    if (sortRef.col === col) sortRef.dir = sortRef.dir === 'desc' ? 'asc' : 'desc';
+    else { sortRef.col = col; sortRef.dir = (col === 0 ? 'asc' : 'desc'); }
+    renderTab(source);
+  }));
 }
 
 function openDrill(source, genus){
@@ -418,15 +547,34 @@ function renderDrill(source, genus, genera){
   let cols, render;
   if (isAmazon){
     cols = ['Rank','ASIN','Item','Glance','Conv','Units','Avg','Revenue'];
+    const dKeys = [null, 'asin', 'title', 'glance', 'conv', 'units', 'avg', 'rev'];
     render = (p,i) => [i+1, p.asin, p.title, fmtN(p.glance), pctFmt(p.conv), fmtN(p.units), fmt$(p.avg), fmt$(p.rev)];
+    var __drillKeys = dKeys;
   } else {
     cols = ['Rank','Title','Units','Avg','Revenue'];
+    const dKeys = [null, 'title', 'units', 'avg', 'rev'];
     render = (p,i) => [i+1, p.title, fmtN(p.units), fmt$(p.avg), fmt$(p.rev)];
+    var __drillKeys = dKeys;
   }
+  if (!state.drillSort[source]) state.drillSort[source] = {col: cols.length - 1, dir: 'desc'};
+  const dSort = state.drillSort[source];
   thead.innerHTML = cols.map((c,i)=> {
     const isText = isAmazon ? (i===1||i===2) : (i===1);
-    return `<th class="${i===0||isText?'':'num'}">${c}</th>`;
+    const arrow = dSort.col === i ? (dSort.dir === 'desc' ? ' ▼' : ' ▲') : '';
+    const clickable = __drillKeys[i] ? ' style="cursor:pointer"' : '';
+    return `<th data-ds="${i}" class="${i===0||isText?'':'num'}"${clickable}>${c}${arrow}</th>`;
   }).join('');
+  // Sort items by the chosen key (unless sorting by rank, which is meaningless)
+  const dKey = __drillKeys[dSort.col];
+  if (dKey){
+    items.sort((a,b) => {
+      let av = a[dKey], bv = b[dKey];
+      if (typeof av === 'string'){ av=av.toLowerCase(); bv=(bv||'').toLowerCase(); }
+      if (av < bv) return dSort.dir === 'desc' ? 1 : -1;
+      if (av > bv) return dSort.dir === 'desc' ? -1 : 1;
+      return 0;
+    });
+  }
   if (!items.length){
     tbody.innerHTML = `<tr><td colspan="${cols.length}" class="empty">No plants match this filter.</td></tr>`;
     return;
@@ -438,6 +586,13 @@ function renderDrill(source, genus, genera){
       return `<td class="${j===0||isText?'':'num'}">${c}</td>`;
     }).join('')}</tr>`;
   }).join('');
+  thead.querySelectorAll('[data-ds]').forEach(th => th.addEventListener('click', () => {
+    const col = +th.dataset.ds;
+    if (!__drillKeys[col]) return;
+    if (dSort.col === col) dSort.dir = dSort.dir === 'desc' ? 'asc' : 'desc';
+    else { dSort.col = col; dSort.dir = (col === 1 ? 'asc' : 'desc'); }
+    renderTab(source);
+  }));
 }
 function renderDrillCompare(source, genus, genera){
   const g = genera.find(x => x.genus === genus);
@@ -489,6 +644,108 @@ function renderAlerts(source, products){
 // ============================================================
 // DOWNLOAD CLEAN DATA
 // ============================================================
+function downloadBreakdown(source){
+  const tabState = state[source];
+  if (!tabState.snapshotId) return;
+  const snap = snapshots.find(s => s.id === tabState.snapshotId);
+  if (!snap) return;
+  const isAmazon = source === 'amazon';
+  const genera = aggregateByGenus(snap.products);
+  const wb = XLSX.utils.book_new();
+
+  // Sheet 1: Genus summary
+  const gRows = genera.map(g => isAmazon
+    ? {Genus: g.genus, SKUs: g.skus, "Glance views": g.glance, "Shipped units": g.units,
+       "Conversion rate": g.conv, "Shipped revenue": +g.rev.toFixed(2),
+       "Avg price": +g.avgPrice.toFixed(2), "Available inventory": g.inv}
+    : {Genus: g.genus, SKUs: g.skus, "Net items sold": g.units,
+       "Total sales": +g.rev.toFixed(2), "Avg price": +g.avgPrice.toFixed(2)});
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(gRows), "Genus summary");
+
+  // Sheet 2: All plants (every product, sorted by genus then revenue)
+  const sortedProducts = snap.products.slice().sort((a,b) =>
+    a.genus.localeCompare(b.genus) || b.rev - a.rev);
+  const pRows = sortedProducts.map(p => isAmazon
+    ? {ASIN: p.asin, "Item name": p.title, Genus: p.genus,
+       "Glance views": p.glance, "Conversion": p.conv,
+       "Shipped units": p.units, "Avg price": +p.avg.toFixed(2),
+       "Shipped revenue": +p.rev.toFixed(2), "Inventory": p.inv}
+    : {"Product title": p.title, Genus: p.genus,
+       "Net items sold": p.units, "Gross sales": +(p.gross||0).toFixed(2),
+       "Discounts": +(p.disc||0).toFixed(2), "Returns": +(p.ret||0).toFixed(2),
+       "Net sales": +(p.net||0).toFixed(2), "Total sales": +p.rev.toFixed(2)});
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pRows), "All plants");
+
+  // Sheet 3+: Amazon alerts
+  if (isAmazon){
+    const oos = snap.products.filter(p => p.inv === 0 && p.glance >= 50)
+      .sort((a,b) => b.glance - a.glance)
+      .map(p => ({ASIN: p.asin, "Item name": p.title, Genus: p.genus,
+                  "Glance views": p.glance, "Shipped units": p.units,
+                  "Shipped revenue": +p.rev.toFixed(2)}));
+    if (oos.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(oos), "OOS alerts");
+    const lowConv = snap.products.filter(p => p.glance >= 200 && p.conv < 0.01)
+      .sort((a,b) => b.glance - a.glance)
+      .map(p => ({ASIN: p.asin, "Item name": p.title, Genus: p.genus,
+                  "Glance views": p.glance, "Conversion": p.conv,
+                  "Shipped units": p.units, "Avg price": +p.avg.toFixed(2)}));
+    if (lowConv.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(lowConv), "Low-conv alerts");
+  }
+
+  XLSX.writeFile(wb, `${source}-breakdown-${snap.startDate}-to-${snap.endDate}.xlsx`);
+}
+
+function downloadCross(){
+  const aSnap = snapshots.find(s => s.id === state.cross.amazonId);
+  const sSnap = snapshots.find(s => s.id === state.cross.shopifyId);
+  if (!aSnap || !sSnap) return;
+  const aG = aggregateByGenus(aSnap.products);
+  const sG = aggregateByGenus(sSnap.products);
+  const aMap = Object.fromEntries(aG.map(g => [g.genus, g]));
+  const sMap = Object.fromEntries(sG.map(g => [g.genus, g]));
+  const allG = new Set([...aG.map(g=>g.genus), ...sG.map(g=>g.genus)]);
+  const rows = [];
+  for (const g of allG){
+    const a = aMap[g] || {rev:0, units:0};
+    const s = sMap[g] || {rev:0, units:0};
+    const combined = a.rev + s.rev;
+    let dominant = '—';
+    if (a.rev > 0 && s.rev === 0) dominant = 'Amazon only';
+    else if (s.rev > 0 && a.rev === 0) dominant = 'Shopify only';
+    else if (a.rev > s.rev * 1.1) dominant = `Amazon (${(a.rev/s.rev).toFixed(1)}x)`;
+    else if (s.rev > a.rev * 1.1) dominant = `Shopify (${(s.rev/a.rev).toFixed(1)}x)`;
+    else dominant = 'Balanced';
+    rows.push({Genus: g, "Amazon $": +a.rev.toFixed(2), "Shopify $": +s.rev.toFixed(2),
+               "Combined $": +combined.toFixed(2),
+               "Amazon share": combined > 0 ? a.rev/combined : 0,
+               "Amazon units": a.units, "Shopify units": s.units,
+               "Dominant channel": dominant});
+  }
+  rows.sort((a,b) => b["Combined $"] - a["Combined $"]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Cross-channel");
+  // Opportunities sheets
+  const plant = rows.filter(r => r.Genus !== '(no genus)');
+  const shopOnly = plant.filter(r => r["Amazon $"] === 0 && r["Shopify $"] > 0)
+    .sort((a,b) => b["Shopify $"] - a["Shopify $"]);
+  const amzOnly  = plant.filter(r => r["Shopify $"] === 0 && r["Amazon $"] > 0)
+    .sort((a,b) => b["Amazon $"] - a["Amazon $"]);
+  const strongAmz = plant.filter(r => r["Shopify $"] > 0 && r["Amazon $"] > 0 &&
+                                       (r["Amazon $"] / r["Shopify $"]) > 0.20)
+    .map(r => ({...r, "Amazon / Shopify": +(r["Amazon $"] / r["Shopify $"]).toFixed(4)}))
+    .sort((a,b) => b["Amazon / Shopify"] - a["Amazon / Shopify"]);
+  if (shopOnly.length) XLSX.utils.book_append_sheet(wb,
+    XLSX.utils.json_to_sheet(shopOnly.map(r => ({Genus:r.Genus, "Shopify $":r["Shopify $"], "Shopify units":r["Shopify units"]}))),
+    "Opportunity Launch on Amazon");
+  if (amzOnly.length) XLSX.utils.book_append_sheet(wb,
+    XLSX.utils.json_to_sheet(amzOnly.map(r => ({Genus:r.Genus, "Amazon $":r["Amazon $"], "Amazon units":r["Amazon units"]}))),
+    "Amazon-only genera");
+  if (strongAmz.length) XLSX.utils.book_append_sheet(wb,
+    XLSX.utils.json_to_sheet(strongAmz),
+    "Amazon strong (Amazon over 20pct)");
+  XLSX.writeFile(wb, `cross-channel-${aSnap.label.replace(/\s+/g,'_')}-vs-${sSnap.label.replace(/\s+/g,'_')}.xlsx`);
+}
+
 function downloadClean(source){
   const tabState = state[source];
   if (!tabState.snapshotId) return;
@@ -529,7 +786,28 @@ function renderCross(){
     return;
   }
   empty.style.display = "none"; content.style.display = "block";
-  // Aggregate by genus from each side
+
+  // Auto-detect post-April overlap (Amazon counted inside Shopify since 2026-04)
+  const OVERLAP_THRESHOLD = "2026-04-01";
+  const periodOverlaps = aSnap.startDate >= OVERLAP_THRESHOLD || sSnap.startDate >= OVERLAP_THRESHOLD;
+  // Read user override (persisted in localStorage)
+  if (state.cross.overlap === undefined) {
+    state.cross.overlap = (localStorage.getItem("sb-cross-overlap") || "") === "1" || periodOverlaps;
+  }
+  const overlap = state.cross.overlap;
+  const overlapBox = document.getElementById("cross-overlap-box");
+  overlapBox.style.display = "block";
+  overlapBox.innerHTML = `
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:#e65100">
+      <input type="checkbox" id="cross-overlap-chk" ${overlap ? 'checked' : ''}>
+      <span><strong>⚠ Amazon revenue is included in Shopify totals</strong> — since April 2026, Amazon sales flow through Shopify. Check this so the combined figures don't double-count.</span>
+    </label>`;
+  document.getElementById("cross-overlap-chk").onchange = e => {
+    state.cross.overlap = e.target.checked;
+    localStorage.setItem("sb-cross-overlap", e.target.checked ? "1" : "0");
+    renderCross();
+  };
+
   const aGenera = aggregateByGenus(aSnap.products);
   const sGenera = aggregateByGenus(sSnap.products);
   const allG = new Set([...aGenera.map(g=>g.genus), ...sGenera.map(g=>g.genus)]);
@@ -539,54 +817,279 @@ function renderCross(){
   for (const g of allG){
     const a = aMap[g] || {rev:0, units:0, skus:0};
     const s = sMap[g] || {rev:0, units:0, skus:0};
-    const combined = a.rev + s.rev;
-    cross.push({genus: g, aRev: a.rev, sRev: s.rev, aUnits: a.units, sUnits: s.units, combined, aShare: combined > 0 ? a.rev/combined : 0});
+    let combined, aShare, sNonAmazon;
+    if (overlap){
+      // Amazon is a subset of Shopify. Total = Shopify. "Other Shopify" = Shopify − Amazon (floored at 0)
+      combined = s.rev;
+      sNonAmazon = Math.max(0, s.rev - a.rev);
+      aShare = s.rev > 0 ? Math.min(1, a.rev / s.rev) : 0;
+    } else {
+      combined = a.rev + s.rev;
+      sNonAmazon = s.rev;
+      aShare = combined > 0 ? a.rev / combined : 0;
+    }
+    cross.push({genus: g, aRev: a.rev, sRev: s.rev, sNonAmazon, aUnits: a.units, sUnits: s.units, combined, aShare});
   }
   cross.sort((a,b) => b.combined - a.combined);
   const plant = cross.filter(g => g.genus !== '(no genus)');
-  // Top-line
   const aTot = aSnap.products.reduce((s,p)=>s+p.rev, 0);
   const sTot = sSnap.products.reduce((s,p)=>s+p.rev, 0);
-  const tot = aTot + sTot;
-  document.getElementById("cross-cards").innerHTML = [
-    {label:'Combined revenue', value: fmt$(tot)},
-    {label:'Amazon $', value: fmt$(aTot), sub: `${(tot ? aTot/tot*100 : 0).toFixed(1)}% of total`},
-    {label:'Shopify $', value: fmt$(sTot), sub: `${(tot ? sTot/tot*100 : 0).toFixed(1)}% of total`},
-    {label:'Total units', value: fmtN(aSnap.products.reduce((s,p)=>s+p.units,0) + sSnap.products.reduce((s,p)=>s+p.units,0))},
-    {label:'Genera both channels', value: fmtN(cross.filter(g => g.aRev > 0 && g.sRev > 0 && g.genus !== '(no genus)').length)}
-  ].map(c => `<div class="card"><div class="label">${c.label}</div><div class="value">${c.value}</div>${c.sub?`<div class="sub">${c.sub}</div>`:''}</div>`).join('');
+  const tot = overlap ? sTot : aTot + sTot;
+  const sNonAmazonTot = overlap ? Math.max(0, sTot - aTot) : sTot;
+
+  const cards = overlap
+    ? [
+      {label:'Total revenue (Shopify)', value: fmt$(tot)},
+      {label:'Amazon (incl. in Shopify)', value: fmt$(aTot), sub: `${(sTot ? Math.min(100, aTot/sTot*100) : 0).toFixed(1)}% of Shopify`},
+      {label:'Shopify ex-Amazon', value: fmt$(sNonAmazonTot), sub: `${(sTot ? sNonAmazonTot/sTot*100 : 0).toFixed(1)}% of Shopify`},
+      {label:'Total units (Shopify)', value: fmtN(sSnap.products.reduce((s,p)=>s+p.units,0))},
+    ]
+    : [
+      {label:'Combined revenue', value: fmt$(tot)},
+      {label:'Amazon $', value: fmt$(aTot), sub: `${(tot ? aTot/tot*100 : 0).toFixed(1)}% of total`},
+      {label:'Shopify $', value: fmt$(sTot), sub: `${(tot ? sTot/tot*100 : 0).toFixed(1)}% of total`},
+      {label:'Total units', value: fmtN(aSnap.products.reduce((s,p)=>s+p.units,0) + sSnap.products.reduce((s,p)=>s+p.units,0))},
+      {label:'Genera both channels', value: fmtN(cross.filter(g => g.aRev > 0 && g.sRev > 0 && g.genus !== '(no genus)').length)}
+    ];
+  document.getElementById("cross-cards").innerHTML = cards.map(c => `<div class="card"><div class="label">${c.label}</div><div class="value">${c.value}</div>${c.sub?`<div class="sub">${c.sub}</div>`:''}</div>`).join('');
   document.getElementById("cross-banner").innerHTML = `<strong>${aSnap.label}</strong> (Amazon) vs <strong>${sSnap.label}</strong> (Shopify)`;
-  // Chart: top 25 by combined revenue, stacked bar (Amazon + Shopify)
+
+  // Chart: top 25 by combined, stacked
   const top25 = plant.slice(0, 25);
   const ctx = document.getElementById("cross-chart").getContext('2d');
   if (state.cross.chart) state.cross.chart.destroy();
   state.cross.chart = new Chart(ctx, {
     type:'bar',
-    data:{labels: top25.map(g=>g.genus), datasets:[
-      {label:'Amazon', data: top25.map(g=>g.aRev), backgroundColor:'#ff9800'},
-      {label:'Shopify', data: top25.map(g=>g.sRev), backgroundColor:'#2e7d32'}
-    ]},
+    data:{labels: top25.map(g=>g.genus), datasets: overlap
+      ? [
+          {label:'Amazon (in Shopify)', data: top25.map(g=>Math.min(g.aRev, g.sRev)), backgroundColor:'#ff9800'},
+          {label:'Other Shopify', data: top25.map(g=>g.sNonAmazon), backgroundColor:'#2e7d32'}
+        ]
+      : [
+          {label:'Amazon', data: top25.map(g=>g.aRev), backgroundColor:'#ff9800'},
+          {label:'Shopify', data: top25.map(g=>g.sRev), backgroundColor:'#2e7d32'}
+        ]
+    },
     options:{indexAxis:'y', responsive:true, maintainAspectRatio:false,
       plugins:{legend:{display:true, position:'bottom'}, tooltip:{callbacks:{label:c=>c.dataset.label+': '+fmt$(c.parsed.x)}}},
-      scales:{x:{stacked:true, ticks:{callback:v=>'$'+(v/1000).toFixed(0)+'k'}}, y:{stacked:true}}}
+      scales:{x:{stacked:true, ticks:{callback:fmtAxis}}, y:{stacked:true}}}
   });
+
   // Table
   const tbody = document.getElementById("cross-tbody");
   const thead = document.getElementById("cross-thead");
-  thead.innerHTML = ['Genus','Amazon $','Shopify $','Combined $','Amazon share','Dominant'].map((c,i) => `<th class="${i===0?'':'num'}">${c}</th>`).join('');
+  if (overlap){
+    const overlapCols = ['Genus','Amazon $','Other Shopify $','Shopify total $','Amazon share of Shopify'];
+    const overlapKeys = ['genus','aRev','sNonAmazon','sRev','aShare'];
+    thead.innerHTML = overlapCols.map((c,i) => {
+      const isActive = state.crossSort.col === i;
+      const arrow = isActive ? (state.crossSort.dir === 'desc' ? ' ▼' : ' ▲') : '';
+      return `<th data-sort-col="${i}" class="${i===0?'':'num'}" style="cursor:pointer">${c}${arrow}</th>`;
+    }).join('');
+  } else {
+    const splitCols = ['Genus','Amazon $','Shopify $','Combined $','Amazon share','Dominant'];
+    const splitKeys = ['genus','aRev','sRev','combined','aShare','dominantSort'];
+    thead.innerHTML = splitCols.map((c,i) => {
+      const isActive = state.crossSort.col === i;
+      const arrow = isActive ? (state.crossSort.dir === 'desc' ? ' ▼' : ' ▲') : '';
+      return `<th data-sort-col="${i}" class="${i===0?'':'num'}" style="cursor:pointer">${c}${arrow}</th>`;
+    }).join('');
+  }
   const q = (document.getElementById("cross-search").value || '').trim().toLowerCase();
-  let display = plant;
+  let display = plant.slice();
   if (q) display = display.filter(g => g.genus.toLowerCase().includes(q));
+  // Add a derived dominant-sort key so the Dominant column sorts intuitively (Amazon-heavy → Shopify-heavy)
+  for (const r of display) {
+    r.dominantSort = (r.aRev + r.sRev > 0) ? (r.aRev - r.sRev) / (r.aRev + r.sRev) : 0;
+  }
+  const keysList = overlap ? overlapKeys : splitKeys;
+  const sortKey = keysList[state.crossSort.col] || 'combined';
+  display.sort((a,b) => {
+    let av = a[sortKey], bv = b[sortKey];
+    if (typeof av === 'string'){ av=av.toLowerCase(); bv=(bv||'').toLowerCase(); }
+    if (av < bv) return state.crossSort.dir === 'desc' ? 1 : -1;
+    if (av > bv) return state.crossSort.dir === 'desc' ? -1 : 1;
+    return 0;
+  });
   document.getElementById("cross-count").textContent = display.length + ' genera';
   tbody.innerHTML = display.map(g => {
+    if (overlap){
+      return `<tr class="clickable" data-genus="${g.genus.replace(/"/g,'&quot;')}"><td>${g.genus}</td><td class="num">${fmt$(g.aRev)}</td><td class="num">${fmt$(g.sNonAmazon)}</td><td class="num">${fmt$(g.sRev)}</td><td class="num">${pctFmt(g.aShare)}</td></tr>`;
+    }
     let dom = '—';
     if (g.aRev > 0 && g.sRev === 0) dom = `<span class="badge amazon">Amazon only</span>`;
     else if (g.sRev > 0 && g.aRev === 0) dom = `<span class="badge shopify">Shopify only</span>`;
     else if (g.aRev > g.sRev * 1.1) dom = `<span class="badge amazon">Amazon (${(g.aRev/g.sRev).toFixed(1)}×)</span>`;
     else if (g.sRev > g.aRev * 1.1) dom = `<span class="badge shopify">Shopify (${(g.sRev/g.aRev).toFixed(1)}×)</span>`;
     else dom = `<span class="badge balanced">Balanced</span>`;
-    return `<tr><td>${g.genus}</td><td class="num">${fmt$(g.aRev)}</td><td class="num">${fmt$(g.sRev)}</td><td class="num">${fmt$(g.combined)}</td><td class="num">${pctFmt(g.aShare)}</td><td>${dom}</td></tr>`;
+    return `<tr class="clickable" data-genus="${g.genus.replace(/"/g,'&quot;')}"><td>${g.genus}</td><td class="num">${fmt$(g.aRev)}</td><td class="num">${fmt$(g.sRev)}</td><td class="num">${fmt$(g.combined)}</td><td class="num">${pctFmt(g.aShare)}</td><td>${dom}</td></tr>`;
   }).join('');
+  // Wire row-click → drill into plants for that genus
+  tbody.querySelectorAll('tr.clickable').forEach(tr =>
+    tr.addEventListener('click', () => openCrossDrill(tr.dataset.genus)));
+  if (state.cross.drillGenus) renderCrossDrill(state.cross.drillGenus, aSnap, sSnap, overlap);
+  // Wire sort handlers
+  thead.querySelectorAll('[data-sort-col]').forEach(th => th.addEventListener('click', () => {
+    const col = +th.dataset.sortCol;
+    if (state.crossSort.col === col) state.crossSort.dir = state.crossSort.dir === 'desc' ? 'asc' : 'desc';
+    else { state.crossSort.col = col; state.crossSort.dir = (col === 0 ? 'asc' : 'desc'); }
+    renderCross();
+  }));
+  renderOpportunities(cross, overlap);
+}
+
+function renderOpportunities(cross, overlap){
+  const plant = cross.filter(g => g.genus !== '(no genus)');
+  // 1) Shopify-only: Shopify revenue > 0 but Amazon = 0 → launch on Amazon
+  const shopOnly = plant.filter(g => g.aRev === 0 && g.sRev > 0)
+    .sort((a,b) => b.sRev - a.sRev);
+  // 2) Amazon-only: Amazon revenue > 0 but Shopify = 0 → add to Shopify catalog (rare in overlap mode)
+  const amzOnly = plant.filter(g => g.sRev === 0 && g.aRev > 0)
+    .sort((a,b) => b.aRev - a.aRev);
+  // 3) Amazon strong: Amazon > 20% of Shopify (or 20%+ in non-overlap when Shopify exists)
+  const strongAmz = plant.filter(g => g.sRev > 0 && g.aRev > 0 && (g.aRev / g.sRev) > 0.20)
+    .sort((a,b) => (b.aRev / b.sRev) - (a.aRev / a.sRev));
+
+  const box = document.getElementById("cross-opportunities");
+  if (!shopOnly.length && !amzOnly.length && !strongAmz.length){
+    box.style.display = "none";
+    return;
+  }
+  box.style.display = "block";
+  const sec = (title, color, items, cols, render, hint) => {
+    if (!items.length) return '';
+    const head = cols.map((c,i) => `<th class="${i===0?'':'num'}">${c}</th>`).join('');
+    const rows = items.map(g => `<tr>${render(g).map((c,i)=>`<td class="${i===0?'':'num'}">${c}</td>`).join('')}</tr>`).join('');
+    return `
+      <div style="margin-top:14px">
+        <h3 style="margin:0 0 4px 0;color:${color};font-size:14px">${title} <span class="pill" style="background:${color}22;color:${color}">${items.length}</span></h3>
+        <p class="small" style="margin:0 0 8px 0">${hint}</p>
+        <div class="scroll" style="max-height:280px"><table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>
+      </div>`;
+  };
+  let html = `<div class="panel-h"><h2>🎯 Opportunities</h2></div>`;
+  html += sec(
+    '🚀 Genera selling on Shopify but NOT on Amazon',
+    '#2e7d32', shopOnly,
+    ['Genus','Shopify $','Shopify units','SKUs'],
+    g => [g.genus, fmt$(g.sRev), fmtN(g.sUnits), fmtN((g.sRev > 0 ? Object.keys({}).length : 0))],
+    'Opportunity to launch these on Amazon. Sorted by Shopify revenue (biggest opportunity first).'
+  );
+  html += sec(
+    '🛒 Genera on Amazon but NOT on Shopify' + (overlap ? ' (after netting out)' : ''),
+    '#e65100', amzOnly,
+    ['Genus','Amazon $','Amazon units'],
+    g => [g.genus, fmt$(g.aRev), fmtN(g.aUnits)],
+    overlap
+      ? 'These show Amazon revenue but no Shopify revenue — possibly listings only on Amazon, or data outside the Shopify sync window.'
+      : 'Opportunity to add these to your Shopify catalog. Sorted by Amazon revenue.'
+  );
+  html += sec(
+    '⭐ Genera where Amazon is strong (>20% of Shopify)',
+    '#1565c0', strongAmz,
+    ['Genus','Amazon $','Shopify $','Amazon / Shopify'],
+    g => [g.genus, fmt$(g.aRev), fmt$(g.sRev), pctFmt(g.aRev / g.sRev)],
+    'Amazon is performing meaningfully relative to Shopify for these. Worth doubling down on Amazon PPC, listing optimization, or expanded ASIN coverage.'
+  );
+  box.innerHTML = html;
+}
+
+
+function openCrossDrill(genus){
+  state.cross.drillGenus = genus;
+  state.cross.drillSortA = state.cross.drillSortA || {col: 3, dir: 'desc'};
+  state.cross.drillSortS = state.cross.drillSortS || {col: 2, dir: 'desc'};
+  document.getElementById("cross-drill").style.display = "block";
+  renderTab('cross');
+  document.getElementById("cross-drill").scrollIntoView({behavior:'smooth', block:'start'});
+}
+function closeCrossDrill(){
+  state.cross.drillGenus = null;
+  document.getElementById("cross-drill").style.display = "none";
+}
+function renderCrossDrill(genus, aSnap, sSnap, overlap){
+  const aPlants = aSnap.products.filter(p => p.genus === genus).slice().sort((a,b) => b.rev - a.rev);
+  const sPlants = sSnap.products.filter(p => p.genus === genus).slice().sort((a,b) => b.rev - a.rev);
+  const aSum = aPlants.reduce((s,p) => s+p.rev, 0);
+  const sSum = sPlants.reduce((s,p) => s+p.rev, 0);
+  const share = overlap
+    ? (sSum > 0 ? Math.min(1, aSum/sSum) : 0)
+    : (aSum + sSum > 0 ? aSum/(aSum+sSum) : 0);
+  const shareLabel = overlap ? 'Amazon share of Shopify' : 'Amazon share of combined';
+  const headerHtml = `
+    <div class="panel-h">
+      <h2 id="cross-drill-title">${genus} — plants on each channel</h2>
+      <div class="actions"><button class="tab" id="cross-drill-close">Close</button></div>
+    </div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px">
+      <div class="card" style="flex:1;min-width:170px"><div class="label">Amazon revenue</div><div class="value">${fmt$(aSum)}</div><div class="sub">${aPlants.length} ASINs</div></div>
+      <div class="card" style="flex:1;min-width:170px"><div class="label">Shopify revenue</div><div class="value">${fmt$(sSum)}</div><div class="sub">${sPlants.length} SKUs</div></div>
+      <div class="card" style="flex:1;min-width:170px"><div class="label">${shareLabel}</div><div class="value" style="color:#e65100">${pctFmt(share)}</div></div>
+    </div>`;
+  const sortRows = (rows, sortRef, keys) => {
+    const k = keys[sortRef.col];
+    if (!k) return rows;
+    return rows.slice().sort((a,b) => {
+      let av = a[k], bv = b[k];
+      if (typeof av === 'string'){ av=av.toLowerCase(); bv=(bv||'').toLowerCase(); }
+      if (av < bv) return sortRef.dir === 'desc' ? 1 : -1;
+      if (av > bv) return sortRef.dir === 'desc' ? -1 : 1;
+      return 0;
+    });
+  };
+  const aKeys = [null, 'asin', 'title', 'units', 'rev'];
+  const aCols = ['#','ASIN','Item name','Units','Revenue'];
+  const aSortRef = state.cross.drillSortA;
+  const aSorted = sortRows(aPlants, aSortRef, aKeys);
+  const aHead = aCols.map((c,i) => {
+    const arrow = aSortRef.col === i ? (aSortRef.dir === 'desc' ? ' ▼' : ' ▲') : '';
+    const clickable = aKeys[i] ? ' style="cursor:pointer"' : '';
+    return `<th data-ax="${i}" class="${i===0||i===1||i===2?'':'num'}"${clickable}>${c}${arrow}</th>`;
+  }).join('');
+  const aBody = aSorted.map((p,i) =>
+    `<tr><td>${i+1}</td><td>${p.asin}</td><td>${p.title}</td><td class="num">${fmtN(p.units)}</td><td class="num">${fmt$(p.rev)}</td></tr>`).join('')
+    || `<tr><td colspan="5" class="empty">No Amazon plants in this genus.</td></tr>`;
+
+  const sKeys = [null, 'title', 'units', 'rev'];
+  const sCols = ['#','Title','Units','Revenue'];
+  const sSortRef = state.cross.drillSortS;
+  const sSorted = sortRows(sPlants, sSortRef, sKeys);
+  const sHead = sCols.map((c,i) => {
+    const arrow = sSortRef.col === i ? (sSortRef.dir === 'desc' ? ' ▼' : ' ▲') : '';
+    const clickable = sKeys[i] ? ' style="cursor:pointer"' : '';
+    return `<th data-sx="${i}" class="${i===0||i===1?'':'num'}"${clickable}>${c}${arrow}</th>`;
+  }).join('');
+  const sBody = sSorted.map((p,i) =>
+    `<tr><td>${i+1}</td><td>${p.title}</td><td class="num">${fmtN(p.units)}</td><td class="num">${fmt$(p.rev)}</td></tr>`).join('')
+    || `<tr><td colspan="4" class="empty">No Shopify plants in this genus.</td></tr>`;
+
+  document.getElementById("cross-drill").innerHTML = headerHtml + `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div>
+        <h3 style="margin:0 0 6px 0;color:#e65100">📦 Amazon plants <span class="pill" style="background:#fff3e0;color:#e65100">${aPlants.length}</span></h3>
+        <div class="scroll" style="max-height:520px"><table><thead><tr>${aHead}</tr></thead><tbody>${aBody}</tbody></table></div>
+      </div>
+      <div>
+        <h3 style="margin:0 0 6px 0;color:#2e7d32">🛒 Shopify plants <span class="pill">${sPlants.length}</span></h3>
+        <div class="scroll" style="max-height:520px"><table><thead><tr>${sHead}</tr></thead><tbody>${sBody}</tbody></table></div>
+      </div>
+    </div>`;
+  // Wire close + sort handlers
+  document.getElementById("cross-drill-close").addEventListener('click', closeCrossDrill);
+  document.querySelectorAll('#cross-drill [data-ax]').forEach(th => th.addEventListener('click', () => {
+    const col = +th.dataset.ax;
+    if (!aKeys[col]) return;
+    if (aSortRef.col === col) aSortRef.dir = aSortRef.dir === 'desc' ? 'asc' : 'desc';
+    else { aSortRef.col = col; aSortRef.dir = (col===1||col===2 ? 'asc' : 'desc'); }
+    renderTab('cross');
+  }));
+  document.querySelectorAll('#cross-drill [data-sx]').forEach(th => th.addEventListener('click', () => {
+    const col = +th.dataset.sx;
+    if (!sKeys[col]) return;
+    if (sSortRef.col === col) sSortRef.dir = sSortRef.dir === 'desc' ? 'asc' : 'desc';
+    else { sSortRef.col = col; sSortRef.dir = (col===1 ? 'asc' : 'desc'); }
+    renderTab('cross');
+  }));
 }
 
 // ============================================================
@@ -600,8 +1103,10 @@ function openManage(){
   } else {
     body.innerHTML = `<table><thead><tr><th>Source</th><th>Period</th><th>SKUs</th><th>Uploaded</th><th></th></tr></thead><tbody>${
       snapshots.slice().sort((a,b) => b.uploadedAt.localeCompare(a.uploadedAt)).map(s =>
-        `<tr><td><span class="badge ${s.source}">${s.source}</span></td><td>${s.label}</td><td>${s.products.length}</td><td>${new Date(s.uploadedAt).toLocaleDateString()}</td><td><button class="tab" data-del="${s.id}">Delete</button></td></tr>`
+        `<tr><td><span class="badge ${s.source}">${s.source}</span></td><td>${s.label}</td><td>${s.products.length}</td><td>${new Date(s.uploadedAt).toLocaleDateString()}</td><td><button class="tab" data-edit="${s.id}">Edit period</button> <button class="tab danger" data-del="${s.id}">Delete</button></td></tr>`
       ).join('')}</tbody></table>`;
+    body.querySelectorAll('[data-edit]').forEach(btn =>
+      btn.addEventListener('click', () => editSnapshotPeriod(btn.dataset.edit)));
     body.querySelectorAll('[data-del]').forEach(btn =>
       btn.addEventListener('click', () => {
         if (confirm('Delete this snapshot? This cannot be undone.')) {
@@ -660,6 +1165,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById(`${src}-prod-search`).addEventListener('input', () => renderTab(src));
     document.getElementById(`${src}-close-drill`).addEventListener('click', () => closeDrill(src));
     document.getElementById(`${src}-download`).addEventListener('click', () => downloadClean(src));
+    document.getElementById(`${src}-download-breakdown`).addEventListener('click', () => downloadBreakdown(src));
     document.querySelectorAll(`#tab-${src} [data-filter]`).forEach(btn =>
       btn.addEventListener('click', () => {
         state[src].drillFilter = btn.dataset.filter;
@@ -676,6 +1182,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('cross-amazon-select').addEventListener('change', e => { state.cross.amazonId = e.target.value || null; renderTab('cross'); });
   document.getElementById('cross-shopify-select').addEventListener('change', e => { state.cross.shopifyId = e.target.value || null; renderTab('cross'); });
   document.getElementById('cross-search').addEventListener('input', () => renderTab('cross'));
+  document.getElementById('cross-download').addEventListener('click', downloadCross);
   document.getElementById('manage-btn').addEventListener('click', openManage);
   document.getElementById('manage-close').addEventListener('click', () => document.getElementById('manage-modal').style.display = 'none');
   document.getElementById('manage-modal').addEventListener('click', e => {
