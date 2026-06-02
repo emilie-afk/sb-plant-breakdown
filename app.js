@@ -676,6 +676,30 @@ function downloadBreakdown(source){
        "Net sales": +(p.net||0).toFixed(2), "Total sales": +p.rev.toFixed(2)});
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pRows), "All plants");
 
+  // Per-genus sheets — top 25 plant genera (exclude "(no genus)")
+  function safeName(n){ return String(n).replace(/[:\\/?*\[\]]/g, '_').slice(0, 31); }
+  const top25 = genera.filter(g => g.genus !== '(no genus)').slice(0, 25);
+  const usedNames = new Set();
+  for (const g of top25){
+    let name = safeName(g.genus);
+    // Avoid duplicate sheet names (Excel disallows that)
+    let n = 2;
+    let base = name;
+    while (usedNames.has(name.toLowerCase())){ name = (base + '_' + n).slice(0, 31); n++; }
+    usedNames.add(name.toLowerCase());
+    const items = g.items.slice().sort((a,b) => b.rev - a.rev);
+    const rows = items.map((p, i) => isAmazon
+      ? {Rank: i+1, ASIN: p.asin, "Item name": p.title,
+         "Glance views": p.glance, Conversion: p.conv,
+         "Shipped units": p.units, "Avg price": +p.avg.toFixed(2),
+         "Shipped revenue": +p.rev.toFixed(2), Inventory: p.inv}
+      : {Rank: i+1, "Product title": p.title,
+         "Net items sold": p.units, "Gross sales": +(p.gross||0).toFixed(2),
+         "Discounts": +(p.disc||0).toFixed(2), "Returns": +(p.ret||0).toFixed(2),
+         "Net sales": +(p.net||0).toFixed(2), "Total sales": +p.rev.toFixed(2)});
+    if (rows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), name);
+  }
+
   // Sheet 3+: Amazon alerts
   if (isAmazon){
     const oos = snap.products.filter(p => p.inv === 0 && p.glance >= 50)
