@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Succulents Box — Sales Breakdown Analyzer</title>
+<style>
+  :root { color-scheme: light; --bg:#f7faf7; --card:#ffffff; --ink:#1b2421; --muted:#5b6661;
+          --accent:#2e7d32; --accent-2:#a5d6a7; --up:#1b5e20; --down:#b71c1c; --flat:#9e9e9e;
+          --warn:#f57f17; --oos:#c62828; --amazon:#ff9800; --border:#dfe6df; }
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+       background:var(--bg);color:var(--ink);margin:0;padding:20px;line-height:1.45;max-width:1400px;margin-left:auto;margin-right:auto}
+  h1{margin:0 0 4px 0;font-size:22px;color:var(--accent)}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:18px}
+  .tabs{display:flex;gap:4px;border-bottom:2px solid var(--border);margin-bottom:18px}
+  .tab-btn{background:transparent;color:var(--muted);border:0;padding:10px 18px;cursor:pointer;font-size:14px;font-weight:600;border-bottom:3px solid transparent;margin-bottom:-2px}
+  .tab-btn.active{color:var(--accent);border-bottom-color:var(--accent)}
+  .tab-btn:hover{color:var(--accent)}
+  .tab-panel{display:none}
+  .picker{background:var(--card);border:1px solid var(--border);border-radius:10px;
+          padding:14px 16px;margin-bottom:14px;display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+  .picker label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-right:4px;font-weight:600}
+  .picker select{padding:7px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px;min-width:220px;background:#fff}
+  .picker .right{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
+  .banner{font-size:13px;color:var(--muted);padding:6px 16px 12px}
+  .dropzone{background:var(--card);border:2px dashed var(--accent-2);border-radius:14px;
+            padding:32px 24px;text-align:center;margin-bottom:14px;cursor:pointer;
+            transition:background .15s,border-color .15s}
+  .dropzone:hover, .dropzone.drag{background:#eef5ee;border-color:var(--accent)}
+  .dropzone.loading{opacity:.6;pointer-events:none}
+  .dropzone .dz-msg{font-size:16px;color:var(--accent);font-weight:600;margin-bottom:6px}
+  .dropzone .dz-sub{font-size:12px;color:var(--muted)}
+  .dropzone input{display:none}
+  .grid{display:grid;gap:14px}
+  .cards{grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-bottom:14px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:10px;
+        padding:14px 16px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+  .card .label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+  .card .value{font-size:22px;font-weight:600;margin-top:4px}
+  .card .sub{font-size:12px;color:var(--muted);margin-top:4px}
+  .up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--flat)}
+  .panel{background:var(--card);border:1px solid var(--border);border-radius:10px;
+         padding:18px;margin-bottom:14px}
+  .panel-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:8px;flex-wrap:wrap}
+  .panel-h h2{margin:0;font-size:16px;color:var(--accent)}
+  .panel-h .actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  button{background:var(--accent);color:#fff;border:0;border-radius:6px;padding:7px 12px;font-size:13px;cursor:pointer}
+  button.tab{background:#fff;color:var(--accent);border:1px solid var(--accent);padding:6px 12px;font-size:12px;border-radius:6px}
+  button.tab.active{background:var(--accent);color:#fff}
+  button.tab.danger{color:var(--down);border-color:var(--down)}
+  button.tab.danger:hover{background:#ffebee}
+  .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap}
+  .badge.ok{background:#e8f5e9;color:var(--up)}
+  .badge.alert{background:#ffebee;color:var(--oos)}
+  .badge.amazon{background:#fff3e0;color:#e65100}
+  .badge.shopify{background:#e8f5e9;color:var(--up)}
+  .badge.balanced{background:#f5f5f5;color:#666}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--border)}
+  th{background:#f0f5f0;color:var(--accent);font-weight:600;cursor:pointer;user-select:none;position:sticky;top:0;z-index:1}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  tr:hover{background:#f9fbf9}
+  tr.clickable{cursor:pointer}
+  .filterbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center}
+  .filterbar input{padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;flex:1;min-width:180px;max-width:300px}
+  .pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;background:#eef5ee;color:var(--accent);margin-left:6px}
+  .chart-box{position:relative;height:560px}
+  .scroll{max-height:520px;overflow:auto;border:1px solid var(--border);border-radius:6px}
+  .empty{color:var(--muted);font-style:italic;text-align:center;padding:30px 10px}
+  .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:100;align-items:center;justify-content:center}
+  .modal-box{background:#fff;border-radius:12px;padding:24px;max-width:720px;width:90%;max-height:80vh;overflow:auto}
+  .modal-box h2{margin-top:0;color:var(--accent)}
+  .modal-box .right{text-align:right;margin-top:12px}
+  .small{font-size:11px;color:var(--muted)}
+</style>
+</head>
+<body>
+
+<h1>🌵 Succulents Box — Sales Breakdown Analyzer</h1>
+<div class="sub">Upload Amazon or Shopify exports. Everything is processed in your browser — nothing is uploaded to any server. Saved snapshots persist for next visit.</div>
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="amazon">📦 Amazon</button>
+    <button class="tab-btn" data-tab="shopify">🛒 Shopify</button>
+    <button class="tab-btn" data-tab="cross">⇆ Cross-channel</button>
+  </div>
+  <button class="tab" id="manage-btn">⚙ Manage snapshots</button>
+</div>
+
+<!-- ============== AMAZON ============== -->
+<div class="tab-panel" id="tab-amazon" style="display:block">
+  <div class="picker">
+    <label>Snapshot</label><select id="amazon-snap-select"></select>
+    <label>vs Compare</label><select id="amazon-compare-select"></select>
+    <div class="right">
+      <button class="tab" id="amazon-download">⬇ Download clean data</button>
+    </div>
+  </div>
+  <div class="dropzone" id="amazon-dropzone">
+    <div class="dz-msg">📂 Drop file here, or click to browse</div>
+    <div class="dz-sub">Accepts Amazon metric-data .xlsx</div>
+    <input type="file" id="amazon-file-input" accept=".xlsx,.xls">
+  </div>
+  <div class="banner" id="amazon-mode-banner"></div>
+  <div id="amazon-empty" class="empty" style="display:block">Drop an Amazon metric-data file above to get started.</div>
+  <div id="amazon-content" style="display:none">
+    <div class="grid cards" id="amazon-cards"></div>
+    <div class="panel">
+      <div class="panel-h"><h2>Top 25 genera by revenue</h2></div>
+      <div class="chart-box"><canvas id="amazon-chart"></canvas></div>
+    </div>
+    <div class="panel">
+      <div class="panel-h"><h2>Genus summary <span class="pill" id="amazon-genus-count"></span></h2></div>
+      <div class="filterbar"><input id="amazon-genus-search" placeholder="Search genus…"></div>
+      <div class="scroll"><table><thead><tr id="amazon-genus-thead"></tr></thead><tbody id="amazon-genus-tbody"></tbody></table></div>
+      <div class="small" style="margin-top:6px">Click any row to drill into the plants in that genus.</div>
+    </div>
+    <div class="panel" id="amazon-drill" style="display:none">
+      <div class="panel-h">
+        <h2 id="amazon-drill-title">Drill-down</h2>
+        <div class="actions">
+          <button class="tab" data-filter="ge100">≥ $100 only</button>
+          <button class="tab active" data-filter="ge100" style="display:none"></button>
+          <button class="tab" data-filter="all">All plants</button>
+          <button class="tab" id="amazon-close-drill">Close</button>
+        </div>
+      </div>
+      <div class="filterbar">
+        <input id="amazon-prod-search" placeholder="Search plant…">
+        <span class="pill" id="amazon-drill-count"></span>
+      </div>
+      <div class="scroll"><table><thead><tr id="amazon-prod-thead"></tr></thead><tbody id="amazon-prod-tbody"></tbody></table></div>
+    </div>
+    <div class="panel">
+      <div class="panel-h">
+        <h2>Amazon alerts <span class="pill" id="amazon-alerts-count"></span></h2>
+        <div class="actions">
+          <button class="tab active" data-alert="oos">OOS with traffic</button>
+          <button class="tab" data-alert="lowconv">Low conversion</button>
+        </div>
+      </div>
+      <div class="scroll"><table><thead><tr id="amazon-alerts-thead"></tr></thead><tbody id="amazon-alerts-tbody"></tbody></table></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============== SHOPIFY ============== -->
+<div class="tab-panel" id="tab-shopify">
+  <div class="picker">
+    <label>Snapshot</label><select id="shopify-snap-select"></select>
+    <label>vs Compare</label><select id="shopify-compare-select"></select>
+    <div class="right">
+      <button class="tab" id="shopify-download">⬇ Download clean data</button>
+    </div>
+  </div>
+  <div class="dropzone" id="shopify-dropzone">
+    <div class="dz-msg">📂 Drop file here, or click to browse</div>
+    <div class="dz-sub">Accepts Shopify "Total sales by product" .csv</div>
+    <input type="file" id="shopify-file-input" accept=".csv">
+  </div>
+  <div class="banner" id="shopify-mode-banner"></div>
+  <div id="shopify-empty" class="empty" style="display:block">Drop a Shopify CSV above to get started.</div>
+  <div id="shopify-content" style="display:none">
+    <div class="grid cards" id="shopify-cards"></div>
+    <div class="panel">
+      <div class="panel-h"><h2>Top 25 genera by revenue</h2></div>
+      <div class="chart-box"><canvas id="shopify-chart"></canvas></div>
+    </div>
+    <div class="panel">
+      <div class="panel-h"><h2>Genus summary <span class="pill" id="shopify-genus-count"></span></h2></div>
+      <div class="filterbar"><input id="shopify-genus-search" placeholder="Search genus…"></div>
+      <div class="scroll"><table><thead><tr id="shopify-genus-thead"></tr></thead><tbody id="shopify-genus-tbody"></tbody></table></div>
+      <div class="small" style="margin-top:6px">Click any row to drill into the plants in that genus.</div>
+    </div>
+    <div class="panel" id="shopify-drill" style="display:none">
+      <div class="panel-h">
+        <h2 id="shopify-drill-title">Drill-down</h2>
+        <div class="actions">
+          <button class="tab active" data-filter="ge100">≥ $100 only</button>
+          <button class="tab" data-filter="all">All plants</button>
+          <button class="tab" id="shopify-close-drill">Close</button>
+        </div>
+      </div>
+      <div class="filterbar">
+        <input id="shopify-prod-search" placeholder="Search plant…">
+        <span class="pill" id="shopify-drill-count"></span>
+      </div>
+      <div class="scroll"><table><thead><tr id="shopify-prod-thead"></tr></thead><tbody id="shopify-prod-tbody"></tbody></table></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============== CROSS-CHANNEL ============== -->
+<div class="tab-panel" id="tab-cross">
+  <div class="picker">
+    <label>Amazon</label><select id="cross-amazon-select"></select>
+    <label>Shopify</label><select id="cross-shopify-select"></select>
+  </div>
+  <div class="banner" id="cross-banner"></div>
+  <div id="cross-empty" class="empty" style="display:block">Upload at least one Amazon and one Shopify snapshot to see the cross-channel comparison.</div>
+  <div id="cross-content" style="display:none">
+    <div class="grid cards" id="cross-cards"></div>
+    <div class="panel">
+      <div class="panel-h"><h2>Top 25 genera — channel split</h2></div>
+      <div class="chart-box"><canvas id="cross-chart"></canvas></div>
+    </div>
+    <div class="panel">
+      <div class="panel-h"><h2>Channel preference <span class="pill" id="cross-count"></span></h2></div>
+      <div class="filterbar"><input id="cross-search" placeholder="Search genus…"></div>
+      <div class="scroll"><table><thead><tr id="cross-thead"></tr></thead><tbody id="cross-tbody"></tbody></table></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============== MANAGE MODAL ============== -->
+<div class="modal" id="manage-modal">
+  <div class="modal-box">
+    <h2>Saved snapshots</h2>
+    <p class="small">These are stored in your browser only. Clearing browser data or using a different device/browser will lose them.</p>
+    <div id="manage-body"></div>
+    <div class="right"><button class="tab" id="manage-close">Close</button></div>
+  </div>
+</div>
+
+<!-- Libraries: SheetJS for xlsx parsing, Chart.js for charts -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.js"></script>
+<script src="genus-data.js"></script>
+<script src="app.js"></script>
+
+</body>
+</html>
