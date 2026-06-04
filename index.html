@@ -118,6 +118,19 @@
       <div class="scroll"><table><thead><tr id="amazon-genus-thead"></tr></thead><tbody id="amazon-genus-tbody"></tbody></table></div>
       <div class="small" style="margin-top:6px">Click any row to drill into the plants in that genus.</div>
     </div>
+    <div class="panel" id="amazon-top-plants">
+      <div class="panel-h">
+        <h2>High-revenue plants <span class="pill" id="amazon-tp-count"></span></h2>
+        <div class="actions">
+          <span class="small">Threshold:</span>
+          <button class="tab" data-threshold="100">≥ $100</button>
+          <button class="tab" data-threshold="500">≥ $500</button>
+          <button class="tab" data-threshold="1000">≥ $1,000</button>
+          <input type="number" id="amazon-tp-custom" min="0" step="50" style="width:90px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px" placeholder="custom">
+        </div>
+      </div>
+      <div class="scroll" style="max-height:520px"><table><thead><tr id="amazon-tp-thead"></tr></thead><tbody id="amazon-tp-tbody"></tbody></table></div>
+    </div>
     <div class="panel" id="amazon-drill" style="display:none">
       <div class="panel-h">
         <h2 id="amazon-drill-title">Drill-down</h2>
@@ -175,6 +188,19 @@
       <div class="filterbar"><input id="shopify-genus-search" placeholder="Search genus…"></div>
       <div class="scroll"><table><thead><tr id="shopify-genus-thead"></tr></thead><tbody id="shopify-genus-tbody"></tbody></table></div>
       <div class="small" style="margin-top:6px">Click any row to drill into the plants in that genus.</div>
+    </div>
+    <div class="panel" id="shopify-top-plants">
+      <div class="panel-h">
+        <h2>High-revenue plants <span class="pill" id="shopify-tp-count"></span></h2>
+        <div class="actions">
+          <span class="small">Threshold:</span>
+          <button class="tab" data-threshold="100">≥ $100</button>
+          <button class="tab" data-threshold="500">≥ $500</button>
+          <button class="tab" data-threshold="1000">≥ $1,000</button>
+          <input type="number" id="shopify-tp-custom" min="0" step="50" style="width:90px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px" placeholder="custom">
+        </div>
+      </div>
+      <div class="scroll" style="max-height:520px"><table><thead><tr id="shopify-tp-thead"></tr></thead><tbody id="shopify-tp-tbody"></tbody></table></div>
     </div>
     <div class="panel" id="shopify-drill" style="display:none">
       <div class="panel-h">
