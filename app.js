@@ -656,7 +656,7 @@ function renderTopPlants(source, products){
   } else {
     tbody.innerHTML = items.map(p => {
       const t = getType(p.genus);
-      const tBadge = t ? `<span class="badge ${t === 'Succulent' ? 'shopify' : 'amazon'}">${t}</span>` : '';
+      const tBadge = t ? `<span class="badge ${t === 'Succulent' ? 'shopify' : (t === 'Air Plant' ? 'airplant' : 'amazon')}">${t}</span>` : '';
       const cells = isAmazon
         ? [p.asin, p.title, p.genus, tBadge, fmtN(p.glance), pctFmt(p.conv), fmtN(p.units), fmt$(p.avg), fmt$(p.rev)]
         : [p.title, p.genus, tBadge, fmtN(p.units), fmt$(p.avg), fmt$(p.rev)];
@@ -1273,6 +1273,8 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById(`${src}-download`).addEventListener('click', () => downloadClean(src));
     document.getElementById(`${src}-download-breakdown`).addEventListener('click', () => downloadBreakdown(src));
     document.getElementById(`${src}-tp-download`).addEventListener('click', () => downloadTopPlants(src));
+    const addBtn = document.getElementById(`${src}-addfile-btn`);
+    if (addBtn) addBtn.addEventListener('click', () => document.getElementById(`${src}-file-input`).click());
     document.querySelectorAll(`#tab-${src} [data-threshold]`).forEach(btn =>
       btn.addEventListener('click', () => {
         state.topPlants[src].threshold = +btn.dataset.threshold;
