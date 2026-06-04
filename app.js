@@ -602,17 +602,43 @@ function renderDrillCompare(source, genus, genera){
   if (!g) { closeDrill(source); return; }
   const filter = state[source].drillFilter;
   const q = (document.getElementById(`${source}-prod-search`).value || '').trim().toLowerCase();
-  let items = g.items.slice().sort((a,b) => b.ct - a.ct);
+  let items = g.items.slice();
   if (filter === 'ge100') items = items.filter(p => p.ct >= 100 || p.pt >= 100);
   if (q) items = items.filter(p => p.t.toLowerCase().includes(q));
   document.getElementById(`${source}-drill-count`).textContent = items.length + ' plants';
   const thead = document.getElementById(`${source}-prod-thead`);
   const tbody = document.getElementById(`${source}-prod-tbody`);
   const cols = ['Rank','Title','Cur units','Prior units','Cur $','Prior $','Δ $','Δ %'];
-  thead.innerHTML = cols.map((c,i)=>`<th class="${i===0||i===1?'':'num'}">${c}</th>`).join('');
-  tbody.innerHTML = items.map((p,i) =>
-    `<tr><td>${i+1}</td><td>${p.t}</td><td class="num">${fmtN(p.ci)}</td><td class="num">${fmtN(p.pi)}</td><td class="num">${fmt$(p.ct)}</td><td class="num">${fmt$(p.pt)}</td><td class="num ${deltaClass(p.d)}">${p.d>=0?'+':'-'}${fmt$(Math.abs(p.d))}</td><td class="num ${deltaClass(p.d)}">${arrow(p.pct)} ${pctFmt(p.pct)}</td></tr>`).join('');
-  if (!items.length) tbody.innerHTML = `<tr><td colspan="${cols.length}" class="empty">No plants match this filter.</td></tr>`;
+  const keys = [null, 't', 'ci', 'pi', 'ct', 'pt', 'd', 'pct'];
+  if (!state.drillSort[source]) state.drillSort[source] = {col: 4, dir: 'desc'};
+  const dSort = state.drillSort[source];
+  if (dSort.col >= cols.length) dSort.col = 4; // clamp if user came from non-compare mode
+  const sortKey = keys[dSort.col] || 'ct';
+  items.sort((a,b) => {
+    let av = a[sortKey], bv = b[sortKey];
+    if (typeof av === 'string'){ av = av.toLowerCase(); bv = (bv||'').toLowerCase(); }
+    if (av < bv) return dSort.dir === 'desc' ? 1 : -1;
+    if (av > bv) return dSort.dir === 'desc' ? -1 : 1;
+    return 0;
+  });
+  thead.innerHTML = cols.map((c,i) => {
+    const arrow = dSort.col === i ? (dSort.dir === 'desc' ? ' ▼' : ' ▲') : '';
+    const clickable = keys[i] ? ' style="cursor:pointer"' : '';
+    return `<th data-dsc="${i}" class="${i===0||i===1?'':'num'}"${clickable}>${c}${arrow}</th>`;
+  }).join('');
+  if (!items.length){
+    tbody.innerHTML = `<tr><td colspan="${cols.length}" class="empty">No plants match this filter.</td></tr>`;
+  } else {
+    tbody.innerHTML = items.map((p,i) =>
+      `<tr><td>${i+1}</td><td>${p.t}</td><td class="num">${fmtN(p.ci)}</td><td class="num">${fmtN(p.pi)}</td><td class="num">${fmt$(p.ct)}</td><td class="num">${fmt$(p.pt)}</td><td class="num ${deltaClass(p.d)}">${p.d>=0?'+':'-'}${fmt$(Math.abs(p.d))}</td><td class="num ${deltaClass(p.d)}">${arrow(p.pct)} ${pctFmt(p.pct)}</td></tr>`).join('');
+  }
+  thead.querySelectorAll('[data-dsc]').forEach(th => th.addEventListener('click', () => {
+    const col = +th.dataset.dsc;
+    if (!keys[col]) return;
+    if (dSort.col === col) dSort.dir = dSort.dir === 'desc' ? 'asc' : 'desc';
+    else { dSort.col = col; dSort.dir = (col === 1 ? 'asc' : 'desc'); }
+    renderTab(source);
+  }));
 }
 
 // ============================================================
