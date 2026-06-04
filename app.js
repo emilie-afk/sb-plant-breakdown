@@ -5,6 +5,7 @@ const STORAGE_KEY = "sb-analyzer-snapshots-v1";
 let snapshots = loadSnapshots();
 let activeTab = "amazon";
 let state = {
+  topPlants: {amazon: {threshold: 500, sortCol: null, sortDir: "desc"}, shopify: {threshold: 500, sortCol: null, sortDir: "desc"}},
   crossSort: {col: 3, dir: 'desc'},   // column index, direction
   genusSort: {amazon: {col: 5, dir: 'desc'}, shopify: {col: 3, dir: 'desc'}},
   drillSort: {amazon: {col: 7, dir: 'desc'}, shopify: {col: 4, dir: 'desc'}},
@@ -375,6 +376,7 @@ function renderSingleView(source, snap){
   renderCards(source, totals, false);
   renderChart(source, genera);
   renderGenusTable(source, genera, false);
+  renderTopPlants(source, snap.products);
   if (source === "amazon") renderAlerts(source, snap.products);
   if (state[source].drillGenus) renderDrill(source, state[source].drillGenus, genera);
 }
@@ -390,6 +392,7 @@ function renderCompareView(source, curSnap){
   renderCards(source, cur, true, pri);
   renderChartCompare(source, cmp.genera);
   renderGenusTable(source, cmp.genera, true);
+  renderTopPlants(source, curSnap.products);
   if (source === "amazon") renderAlerts(source, curSnap.products);
   if (state[source].drillGenus) renderDrillCompare(source, state[source].drillGenus, cmp.genera);
 }
@@ -615,6 +618,61 @@ function renderDrillCompare(source, genus, genera){
 // ============================================================
 // AMAZON ALERTS
 // ============================================================
+function renderTopPlants(source, products){
+  const tp = state.topPlants[source];
+  const isAmazon = source === "amazon";
+  const sec = document.getElementById(`${source}-top-plants`);
+  if (!sec) return;
+  // Header is static (already in HTML); we render the body
+  // Highlight active threshold button
+  document.querySelectorAll(`#${source}-top-plants [data-threshold]`).forEach(b =>
+    b.classList.toggle('active', +b.dataset.threshold === tp.threshold));
+  document.getElementById(`${source}-tp-custom`).value = tp.threshold;
+  // Filter & sort
+  let items = products.filter(p => p.rev >= tp.threshold);
+  // Default sort: revenue desc
+  const sortKey = tp.sortCol || 'rev';
+  items = items.slice().sort((a,b) => {
+    let av = a[sortKey], bv = b[sortKey];
+    if (typeof av === 'string'){ av = av.toLowerCase(); bv = (bv||'').toLowerCase(); }
+    if (av < bv) return tp.sortDir === 'desc' ? 1 : -1;
+    if (av > bv) return tp.sortDir === 'desc' ? -1 : 1;
+    return 0;
+  });
+  document.getElementById(`${source}-tp-count`).textContent = items.length + ' plants ≥ $' + tp.threshold;
+  // Build table
+  const cols = isAmazon
+    ? [['ASIN','asin'],['Item name','title'],['Genus','genus'],['Glance','glance'],['Conv','conv'],['Units','units'],['Avg','avg'],['Revenue','rev']]
+    : [['Plant title','title'],['Genus','genus'],['Units','units'],['Avg','avg'],['Revenue','rev']];
+  const thead = document.getElementById(`${source}-tp-thead`);
+  thead.innerHTML = cols.map(([c, k], i) => {
+    const isText = isAmazon ? (i===0||i===1||i===2) : (i===0||i===1);
+    const arrow = (tp.sortCol || 'rev') === k ? (tp.sortDir === 'desc' ? ' ▼' : ' ▲') : '';
+    return `<th data-tpk="${k}" class="${isText?'':'num'}" style="cursor:pointer">${c}${arrow}</th>`;
+  }).join('');
+  const tbody = document.getElementById(`${source}-tp-tbody`);
+  if (!items.length){
+    tbody.innerHTML = `<tr><td colspan="${cols.length}" class="empty">No plants ≥ $${tp.threshold}. Lower the threshold to see more.</td></tr>`;
+  } else {
+    tbody.innerHTML = items.map(p => {
+      const cells = isAmazon
+        ? [p.asin, p.title, p.genus, fmtN(p.glance), pctFmt(p.conv), fmtN(p.units), fmt$(p.avg), fmt$(p.rev)]
+        : [p.title, p.genus, fmtN(p.units), fmt$(p.avg), fmt$(p.rev)];
+      return `<tr>${cells.map((c,j) => {
+        const isText = isAmazon ? (j===0||j===1||j===2) : (j===0||j===1);
+        return `<td class="${isText?'':'num'}">${c}</td>`;
+      }).join('')}</tr>`;
+    }).join('');
+  }
+  // Wire sort handlers
+  thead.querySelectorAll('[data-tpk]').forEach(th => th.addEventListener('click', () => {
+    const k = th.dataset.tpk;
+    if (tp.sortCol === k) tp.sortDir = tp.sortDir === 'desc' ? 'asc' : 'desc';
+    else { tp.sortCol = k; tp.sortDir = (k === 'title' || k === 'asin' || k === 'genus') ? 'asc' : 'desc'; }
+    renderTab(source);
+  }));
+}
+
 function renderAlerts(source, products){
   const tab = state[source].alertTab || 'oos';
   let list, cols, cells;
@@ -1185,6 +1243,15 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById(`${src}-close-drill`).addEventListener('click', () => closeDrill(src));
     document.getElementById(`${src}-download`).addEventListener('click', () => downloadClean(src));
     document.getElementById(`${src}-download-breakdown`).addEventListener('click', () => downloadBreakdown(src));
+    document.querySelectorAll(`#tab-${src} [data-threshold]`).forEach(btn =>
+      btn.addEventListener('click', () => {
+        state.topPlants[src].threshold = +btn.dataset.threshold;
+        renderTab(src);
+      }));
+    document.getElementById(`${src}-tp-custom`).addEventListener('change', e => {
+      const v = parseFloat(e.target.value);
+      if (!isNaN(v) && v >= 0) { state.topPlants[src].threshold = v; renderTab(src); }
+    });
     document.querySelectorAll(`#tab-${src} [data-filter]`).forEach(btn =>
       btn.addEventListener('click', () => {
         state[src].drillFilter = btn.dataset.filter;
