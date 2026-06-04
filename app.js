@@ -642,11 +642,11 @@ function renderTopPlants(source, products){
   document.getElementById(`${source}-tp-count`).textContent = items.length + ' plants ≥ $' + tp.threshold;
   // Build table
   const cols = isAmazon
-    ? [['ASIN','asin'],['Item name','title'],['Genus','genus'],['Glance','glance'],['Conv','conv'],['Units','units'],['Avg','avg'],['Revenue','rev']]
-    : [['Plant title','title'],['Genus','genus'],['Units','units'],['Avg','avg'],['Revenue','rev']];
+    ? [['ASIN','asin'],['Item name','title'],['Genus','genus'],['Type','type'],['Glance','glance'],['Conv','conv'],['Units','units'],['Avg','avg'],['Revenue','rev']]
+    : [['Plant title','title'],['Genus','genus'],['Type','type'],['Units','units'],['Avg','avg'],['Revenue','rev']];
   const thead = document.getElementById(`${source}-tp-thead`);
   thead.innerHTML = cols.map(([c, k], i) => {
-    const isText = isAmazon ? (i===0||i===1||i===2) : (i===0||i===1);
+    const isText = isAmazon ? (i===0||i===1||i===2||i===3) : (i===0||i===1||i===2);
     const arrow = (tp.sortCol || 'rev') === k ? (tp.sortDir === 'desc' ? ' ▼' : ' ▲') : '';
     return `<th data-tpk="${k}" class="${isText?'':'num'}" style="cursor:pointer">${c}${arrow}</th>`;
   }).join('');
@@ -655,11 +655,13 @@ function renderTopPlants(source, products){
     tbody.innerHTML = `<tr><td colspan="${cols.length}" class="empty">No plants ≥ $${tp.threshold}. Lower the threshold to see more.</td></tr>`;
   } else {
     tbody.innerHTML = items.map(p => {
+      const t = getType(p.genus);
+      const tBadge = t ? `<span class="badge ${t === 'Succulent' ? 'shopify' : 'amazon'}">${t}</span>` : '';
       const cells = isAmazon
-        ? [p.asin, p.title, p.genus, fmtN(p.glance), pctFmt(p.conv), fmtN(p.units), fmt$(p.avg), fmt$(p.rev)]
-        : [p.title, p.genus, fmtN(p.units), fmt$(p.avg), fmt$(p.rev)];
+        ? [p.asin, p.title, p.genus, tBadge, fmtN(p.glance), pctFmt(p.conv), fmtN(p.units), fmt$(p.avg), fmt$(p.rev)]
+        : [p.title, p.genus, tBadge, fmtN(p.units), fmt$(p.avg), fmt$(p.rev)];
       return `<tr>${cells.map((c,j) => {
-        const isText = isAmazon ? (j===0||j===1||j===2) : (j===0||j===1);
+        const isText = isAmazon ? (j===0||j===1||j===2||j===3) : (j===0||j===1||j===2);
         return `<td class="${isText?'':'num'}">${c}</td>`;
       }).join('')}</tr>`;
     }).join('');
@@ -702,6 +704,33 @@ function renderAlerts(source, products){
 // ============================================================
 // DOWNLOAD CLEAN DATA
 // ============================================================
+function downloadTopPlants(source){
+  const tabState = state[source];
+  if (!tabState.snapshotId) return;
+  const snap = snapshots.find(s => s.id === tabState.snapshotId);
+  if (!snap) return;
+  const tp = state.topPlants[source];
+  const isAmazon = source === 'amazon';
+  const items = snap.products.filter(p => p.rev >= tp.threshold)
+    .slice().sort((a,b) => b.rev - a.rev);
+  const rows = items.map(p => isAmazon
+    ? {ASIN: p.asin, "Item name": p.title, Genus: p.genus, Type: getType(p.genus),
+       "Glance views": p.glance, Conversion: p.conv,
+       "Shipped units": p.units, "Avg price": +p.avg.toFixed(2),
+       "Shipped revenue": +p.rev.toFixed(2), Inventory: p.inv}
+    : {"Plant title": p.title, Genus: p.genus, Type: getType(p.genus),
+       "Net items sold": p.units, "Avg price": +p.avg.toFixed(2),
+       "Total sales": +p.rev.toFixed(2)});
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const csv = XLSX.utils.sheet_to_csv(ws);
+  const blob = new Blob([csv], {type:"text/csv;charset=utf-8"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `${source}-top-plants-${tp.threshold}-${snap.startDate}-to-${snap.endDate}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function downloadBreakdown(source){
   const tabState = state[source];
   if (!tabState.snapshotId) return;
@@ -1243,6 +1272,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById(`${src}-close-drill`).addEventListener('click', () => closeDrill(src));
     document.getElementById(`${src}-download`).addEventListener('click', () => downloadClean(src));
     document.getElementById(`${src}-download-breakdown`).addEventListener('click', () => downloadBreakdown(src));
+    document.getElementById(`${src}-tp-download`).addEventListener('click', () => downloadTopPlants(src));
     document.querySelectorAll(`#tab-${src} [data-threshold]`).forEach(btn =>
       btn.addEventListener('click', () => {
         state.topPlants[src].threshold = +btn.dataset.threshold;
