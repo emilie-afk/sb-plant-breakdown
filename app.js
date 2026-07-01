@@ -376,7 +376,7 @@ function renderSingleView(source, snap){
   renderCards(source, totals, false);
   renderChart(source, genera);
   renderGenusTable(source, genera, false);
-  renderTopPlants(source, snap.products);
+  renderTopPlants(source, snap.products, snap, null);
   if (source === "amazon") renderAlerts(source, snap.products);
   if (state[source].drillGenus) renderDrill(source, state[source].drillGenus, genera);
 }
@@ -392,7 +392,7 @@ function renderCompareView(source, curSnap){
   renderCards(source, cur, true, pri);
   renderChartCompare(source, cmp.genera);
   renderGenusTable(source, cmp.genera, true);
-  renderTopPlants(source, curSnap.products);
+  renderTopPlants(source, curSnap.products, curSnap, priSnap);
   if (source === "amazon") renderAlerts(source, curSnap.products);
   if (state[source].drillGenus) renderDrillCompare(source, state[source].drillGenus, cmp.genera);
 }
@@ -644,38 +644,81 @@ function renderDrillCompare(source, genus, genera){
 // ============================================================
 // AMAZON ALERTS
 // ============================================================
-function renderTopPlants(source, products){
+function renderTopPlants(source, products, curSnap, priSnap){
   const tp = state.topPlants[source];
   const isAmazon = source === "amazon";
   const sec = document.getElementById(`${source}-top-plants`);
   if (!sec) return;
-  // Header is static (already in HTML); we render the body
-  // Highlight active threshold button
+
+  // Build a "Prior revenue by title" map when in compare mode
+  const priorByTitle = {};
+  if (priSnap){
+    for (const pp of priSnap.products) priorByTitle[pp.title] = pp;
+  }
+  const isCompare = !!priSnap;
+
+  // Show which snapshot the panel is reflecting, at the top of the panel
+  const label = curSnap ? curSnap.label : '';
+  const compareLabel = isCompare ? ` vs ${priSnap.label}` : '';
+  const hdr = document.getElementById(`${source}-tp-heading`);
+  if (hdr) hdr.textContent = `High-revenue plants — ${label}${compareLabel}`;
+
+  // Highlight the active threshold button
   document.querySelectorAll(`#${source}-top-plants [data-threshold]`).forEach(b =>
     b.classList.toggle('active', +b.dataset.threshold === tp.threshold));
   document.getElementById(`${source}-tp-custom`).value = tp.threshold;
-  // Filter & sort
-  let items = products.filter(p => p.rev >= tp.threshold);
-  // Default sort: revenue desc
+
+  // Filter by CURRENT snapshot's revenue meeting the threshold
+  let items = products.filter(p => p.rev >= tp.threshold).slice();
+  // Attach prior + delta if we're comparing
+  if (isCompare){
+    for (const p of items){
+      const pp = priorByTitle[p.title];
+      p._priorRev = pp ? pp.rev : 0;
+      p._priorUnits = pp ? pp.units : 0;
+      p._delta = p.rev - p._priorRev;
+      p._deltaPct = p._priorRev > 0 ? (p.rev - p._priorRev) / p._priorRev : (p.rev > 0 ? 1 : 0);
+    }
+  }
+
+  // Sort
   const sortKey = tp.sortCol || 'rev';
-  items = items.slice().sort((a,b) => {
+  items.sort((a,b) => {
     let av = a[sortKey], bv = b[sortKey];
     if (typeof av === 'string'){ av = av.toLowerCase(); bv = (bv||'').toLowerCase(); }
     if (av < bv) return tp.sortDir === 'desc' ? 1 : -1;
     if (av > bv) return tp.sortDir === 'desc' ? -1 : 1;
     return 0;
   });
+
   document.getElementById(`${source}-tp-count`).textContent = items.length + ' plants ≥ $' + tp.threshold;
-  // Build table
-  const cols = isAmazon
-    ? [['ASIN','asin'],['Item name','title'],['Genus','genus'],['Type','type'],['Glance','glance'],['Conv','conv'],['Units','units'],['Avg','avg'],['Revenue','rev']]
-    : [['Plant title','title'],['Genus','genus'],['Type','type'],['Units','units'],['Avg','avg'],['Revenue','rev']];
+
+  // Columns depend on channel + compare mode
+  let cols;
+  if (isCompare){
+    cols = isAmazon
+      ? [['ASIN','asin'],['Item name','title'],['Genus','genus'],['Type','type'],['Units','units'],['Cur $','rev'],['Prior $','_priorRev'],['Δ $','_delta'],['Δ %','_deltaPct']]
+      : [['Plant title','title'],['Genus','genus'],['Type','type'],['Units','units'],['Cur $','rev'],['Prior $','_priorRev'],['Δ $','_delta'],['Δ %','_deltaPct']];
+  } else {
+    cols = isAmazon
+      ? [['ASIN','asin'],['Item name','title'],['Genus','genus'],['Type','type'],['Glance','glance'],['Conv','conv'],['Units','units'],['Avg','avg'],['Revenue','rev']]
+      : [['Plant title','title'],['Genus','genus'],['Type','type'],['Units','units'],['Avg','avg'],['Revenue','rev']];
+  }
+
+  const isTextIdx = (i) => {
+    if (isCompare){
+      return isAmazon ? (i===0||i===1||i===2||i===3) : (i===0||i===1||i===2);
+    }
+    return isAmazon ? (i===0||i===1||i===2||i===3) : (i===0||i===1||i===2);
+  };
+
   const thead = document.getElementById(`${source}-tp-thead`);
   thead.innerHTML = cols.map(([c, k], i) => {
-    const isText = isAmazon ? (i===0||i===1||i===2||i===3) : (i===0||i===1||i===2);
-    const arrow = (tp.sortCol || 'rev') === k ? (tp.sortDir === 'desc' ? ' ▼' : ' ▲') : '';
-    return `<th data-tpk="${k}" class="${isText?'':'num'}" style="cursor:pointer">${c}${arrow}</th>`;
+    const active = (tp.sortCol || 'rev') === k;
+    const a = active ? (tp.sortDir === 'desc' ? ' ▼' : ' ▲') : '';
+    return `<th data-tpk="${k}" class="${isTextIdx(i)?'':'num'}" style="cursor:pointer">${c}${a}</th>`;
   }).join('');
+
   const tbody = document.getElementById(`${source}-tp-tbody`);
   if (!items.length){
     tbody.innerHTML = `<tr><td colspan="${cols.length}" class="empty">No plants ≥ $${tp.threshold}. Lower the threshold to see more.</td></tr>`;
@@ -683,23 +726,35 @@ function renderTopPlants(source, products){
     tbody.innerHTML = items.map(p => {
       const t = getType(p.genus);
       const tBadge = t ? `<span class="badge ${t === 'Succulent' ? 'shopify' : (t === 'Air Plant' ? 'airplant' : 'amazon')}">${t}</span>` : '';
-      const cells = isAmazon
-        ? [p.asin, p.title, p.genus, tBadge, fmtN(p.glance), pctFmt(p.conv), fmtN(p.units), fmt$(p.avg), fmt$(p.rev)]
-        : [p.title, p.genus, tBadge, fmtN(p.units), fmt$(p.avg), fmt$(p.rev)];
+      let cells;
+      if (isCompare){
+        const dClass = p._delta > 0 ? 'up' : p._delta < 0 ? 'down' : 'flat';
+        cells = isAmazon
+          ? [p.asin, p.title, p.genus, tBadge, fmtN(p.units), fmt$(p.rev), fmt$(p._priorRev),
+             `<span class="${dClass}">${(p._delta>=0?'+':'-')}${fmt$(Math.abs(p._delta))}</span>`,
+             `<span class="${dClass}">${arrow(p._deltaPct)} ${pctFmt(p._deltaPct)}</span>`]
+          : [p.title, p.genus, tBadge, fmtN(p.units), fmt$(p.rev), fmt$(p._priorRev),
+             `<span class="${dClass}">${(p._delta>=0?'+':'-')}${fmt$(Math.abs(p._delta))}</span>`,
+             `<span class="${dClass}">${arrow(p._deltaPct)} ${pctFmt(p._deltaPct)}</span>`];
+      } else {
+        cells = isAmazon
+          ? [p.asin, p.title, p.genus, tBadge, fmtN(p.glance), pctFmt(p.conv), fmtN(p.units), fmt$(p.avg), fmt$(p.rev)]
+          : [p.title, p.genus, tBadge, fmtN(p.units), fmt$(p.avg), fmt$(p.rev)];
+      }
       return `<tr>${cells.map((c,j) => {
-        const isText = isAmazon ? (j===0||j===1||j===2||j===3) : (j===0||j===1||j===2);
-        return `<td class="${isText?'':'num'}">${c}</td>`;
+        return `<td class="${isTextIdx(j)?'':'num'}">${c}</td>`;
       }).join('')}</tr>`;
     }).join('');
   }
-  // Wire sort handlers
+
   thead.querySelectorAll('[data-tpk]').forEach(th => th.addEventListener('click', () => {
     const k = th.dataset.tpk;
     if (tp.sortCol === k) tp.sortDir = tp.sortDir === 'desc' ? 'asc' : 'desc';
-    else { tp.sortCol = k; tp.sortDir = (k === 'title' || k === 'asin' || k === 'genus') ? 'asc' : 'desc'; }
+    else { tp.sortCol = k; tp.sortDir = (k === 'title' || k === 'asin' || k === 'genus' || k === 'type') ? 'asc' : 'desc'; }
     renderTab(source);
   }));
 }
+
 
 function renderAlerts(source, products){
   const tab = state[source].alertTab || 'oos';
