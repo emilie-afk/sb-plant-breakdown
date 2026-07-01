@@ -377,6 +377,7 @@ function renderSingleView(source, snap){
   renderChart(source, genera);
   renderGenusTable(source, genera, false);
   renderTopPlants(source, snap.products, snap, null);
+  renderInsights(source, snap, null);
   if (source === "amazon") renderAlerts(source, snap.products);
   if (state[source].drillGenus) renderDrill(source, state[source].drillGenus, genera);
 }
@@ -393,6 +394,7 @@ function renderCompareView(source, curSnap){
   renderChartCompare(source, cmp.genera);
   renderGenusTable(source, cmp.genera, true);
   renderTopPlants(source, curSnap.products, curSnap, priSnap);
+  renderInsights(source, curSnap, priSnap);
   if (source === "amazon") renderAlerts(source, curSnap.products);
   if (state[source].drillGenus) renderDrillCompare(source, state[source].drillGenus, cmp.genera);
 }
@@ -1123,6 +1125,7 @@ function renderCross(){
     renderCross();
   }));
   renderOpportunities(cross, overlap);
+  renderCrossInsights(aSnap, sSnap, overlap);
 }
 
 function renderOpportunities(cross, overlap){
@@ -1277,6 +1280,198 @@ function renderCrossDrill(genus, aSnap, sSnap, overlap){
     else { sSortRef.col = col; sSortRef.dir = (col===1 ? 'asc' : 'desc'); }
     renderTab('cross');
   }));
+}
+
+
+// ============================================================
+// AUTO-INSIGHTS (rules-based, no AI)
+// ============================================================
+function generateInsights(source, snap, priSnap){
+  const isAmazon = source === "amazon";
+  const products = snap.products;
+  const totalRev = products.reduce((s,p) => s+p.rev, 0);
+  const genera = aggregateByGenus(products).filter(g => g.genus !== "(no genus)");
+  const insights = [];
+
+  // — Concentration
+  const top5Rev = genera.slice(0, 5).reduce((s,g) => s+g.rev, 0);
+  if (totalRev > 0){
+    const pct = top5Rev / totalRev;
+    insights.push({icon:"📊", title:"Concentration", body:
+      `Your top 5 genera drive <strong>${pctFmt(pct)}</strong> of revenue (${fmt$(top5Rev)} of ${fmt$(totalRev)}). ` +
+      (pct > 0.5 ? "That's a concentrated business — a single genus stumble would sting." : "Fairly diversified.") });
+  }
+  // Single-plant concentration (top plant vs its genus)
+  for (const g of genera.slice(0, 8)){
+    const topP = g.items.slice().sort((a,b) => b.rev - a.rev)[0];
+    if (topP && g.rev > 0 && topP.rev / g.rev > 0.5){
+      insights.push({icon:"⚠", title:`${g.genus} concentration risk`, body:
+        `<strong>${topP.title.slice(0,60)}${topP.title.length>60?'…':''}</strong> alone is <strong>${pctFmt(topP.rev/g.rev)}</strong> of ${g.genus} revenue (${fmt$(topP.rev)}). One product away from a hole.` });
+      break;  // Only surface the biggest one
+    }
+  }
+
+  // — Compare-mode insights
+  if (priSnap){
+    const cmp = buildComparison(snap.products, priSnap.products);
+    const priorTotal = priSnap.products.reduce((s,p)=>s+p.rev, 0);
+    const dTotal = totalRev - priorTotal;
+    const pctTotal = priorTotal > 0 ? dTotal/priorTotal : 0;
+    insights.push({icon: dTotal >= 0 ? "📈" : "📉", title:"Overall trend", body:
+      `Revenue <strong class="${dTotal>=0?'up':'down'}">${dTotal>=0?'up':'down'} ${pctFmt(Math.abs(pctTotal))}</strong> vs prior (${fmt$(totalRev)} vs ${fmt$(priorTotal)}).`});
+
+    // Top gainers/decliners (only those with meaningful volume, prior >= $100)
+    const meaningful = cmp.genera.filter(g => g.genus !== "(no genus)" && (g.ct >= 100 || g.pt >= 100));
+    const gainers = meaningful.filter(g => g.pct > 0.10 && g.pt >= 100).sort((a,b) => b.pct - a.pct).slice(0, 3);
+    const decliners = meaningful.filter(g => g.pct < -0.10 && g.pt >= 100).sort((a,b) => a.pct - b.pct).slice(0, 3);
+    if (gainers.length){
+      insights.push({icon:"🚀", title:"Top gainers", body: gainers.map(g =>
+        `<strong>${g.genus}</strong> ${arrow(g.pct)} ${pctFmt(g.pct)} (${fmt$(g.pt)} → ${fmt$(g.ct)})`).join("<br>")});
+    }
+    if (decliners.length){
+      insights.push({icon:"📉", title:"Biggest decliners", body: decliners.map(g =>
+        `<strong>${g.genus}</strong> ${arrow(g.pct)} ${pctFmt(g.pct)} (${fmt$(g.pt)} → ${fmt$(g.ct)})`).join("<br>")});
+    }
+
+    // New plants: no prior revenue, ≥ $100 current
+    const newPlants = cmp.products.filter(p => p.pt === 0 && p.ct >= 100)
+      .sort((a,b) => b.ct - a.ct).slice(0, 5);
+    if (newPlants.length){
+      insights.push({icon:"✨", title:`New wins (${newPlants.length}${newPlants.length===5?'+':''})`, body:
+        "Plants that earned real revenue this period with zero prior:<br>" + newPlants.map(p =>
+        `<strong>${p.t.slice(0,50)}${p.t.length>50?'…':''}</strong> — ${fmt$(p.ct)}`).join("<br>")});
+    }
+
+    // Lost plants: had ≥ $100 prior, $0 current
+    const lostPlants = cmp.products.filter(p => p.ct === 0 && p.pt >= 100)
+      .sort((a,b) => b.pt - a.pt).slice(0, 5);
+    if (lostPlants.length){
+      const lostRev = cmp.products.filter(p => p.ct === 0 && p.pt >= 100).reduce((s,p)=>s+p.pt, 0);
+      insights.push({icon:"👻", title:`Vanished plants (${lostPlants.length}${lostPlants.length===5?'+':''})`, body:
+        `Sold prior, $0 now. Total lost revenue: <strong>${fmt$(lostRev)}</strong>.<br>` +
+        lostPlants.map(p =>
+        `<strong>${p.t.slice(0,50)}${p.t.length>50?'…':''}</strong> — was ${fmt$(p.pt)}`).join("<br>")});
+    }
+  }
+
+  // — Amazon-only insights
+  if (isAmazon){
+    const oos = products.filter(p => p.inv === 0 && p.glance >= 50);
+    if (oos.length){
+      const lostViews = oos.reduce((s,p) => s+p.glance, 0);
+      const avgConv = products.filter(p => p.units > 0 && p.glance > 0).reduce((s,p,_,arr)=>s+p.conv/arr.length, 0);
+      const estLostRev = oos.reduce((s,p) => {
+        const priceGuess = p.avg || products.filter(x => x.avg>0).reduce((s,x,i,a)=>s+x.avg/a.length,0) || 15;
+        return s + p.glance * avgConv * priceGuess;
+      }, 0);
+      insights.push({icon:"📦", title:"Out-of-stock impact", body:
+        `<strong>${oos.length}</strong> Amazon ASINs are OOS with meaningful traffic — <strong>${fmtN(lostViews)}</strong> glance views wasted. Estimated lost revenue at your typical conversion: <strong>${fmt$(estLostRev)}</strong>.`});
+    }
+    const lowConv = products.filter(p => p.glance >= 200 && p.conv < 0.01);
+    if (lowConv.length){
+      insights.push({icon:"⚠", title:"High-traffic, low-conversion", body:
+        `<strong>${lowConv.length}</strong> ASINs get 200+ views but convert under 1%. Listing quality, price, or reviews are dragging them down.`});
+    }
+    // Best conversion by genus (min 300 glance views to be significant)
+    const bestConv = genera.filter(g => g.glance >= 300).sort((a,b) => b.conv - a.conv).slice(0, 3);
+    if (bestConv.length){
+      insights.push({icon:"🎯", title:"Highest-conversion genera", body:
+        "Where PPC dollars work hardest:<br>" + bestConv.map(g =>
+        `<strong>${g.genus}</strong> — ${pctFmt(g.conv)} conv on ${fmtN(g.glance)} views`).join("<br>")});
+    }
+  }
+
+  return insights;
+}
+
+function renderInsights(source, snap, priSnap){
+  const el = document.getElementById(`${source}-insights`);
+  if (!el) return;
+  if (!snap){ el.style.display = "none"; return; }
+  const insights = generateInsights(source, snap, priSnap);
+  if (!insights.length){ el.style.display = "none"; return; }
+  el.style.display = "block";
+  el.innerHTML = `
+    <div class="panel-h"><h2>💡 Insights <span class="pill">${insights.length}</span></h2></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px">
+      ${insights.map(i => `
+        <div style="border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:#fbfefb">
+          <div style="font-weight:600;color:var(--accent);margin-bottom:4px">${i.icon} ${i.title}</div>
+          <div style="font-size:13px;line-height:1.5">${i.body}</div>
+        </div>`).join('')}
+    </div>`;
+}
+
+function generateCrossInsights(aSnap, sSnap, overlap){
+  if (!aSnap || !sSnap) return [];
+  const aG = aggregateByGenus(aSnap.products);
+  const sG = aggregateByGenus(sSnap.products);
+  const aMap = Object.fromEntries(aG.map(g => [g.genus, g]));
+  const sMap = Object.fromEntries(sG.map(g => [g.genus, g]));
+  const allG = new Set([...aG.map(g => g.genus), ...sG.map(g => g.genus)]);
+  const aTot = aSnap.products.reduce((s,p)=>s+p.rev, 0);
+  const sTot = sSnap.products.reduce((s,p)=>s+p.rev, 0);
+  const combined = overlap ? sTot : aTot + sTot;
+  const insights = [];
+
+  // Channel split
+  if (combined > 0){
+    if (overlap){
+      insights.push({icon:"🔗", title:"Channels merged (post-April)", body:
+        `Amazon accounts for <strong>${pctFmt(sTot > 0 ? aTot/sTot : 0)}</strong> of Shopify total revenue (${fmt$(aTot)} of ${fmt$(sTot)}).`});
+    } else {
+      insights.push({icon:"⚖", title:"Channel split", body:
+        `<strong>Amazon</strong> ${pctFmt(aTot/combined)} · <strong>Shopify</strong> ${pctFmt(sTot/combined)} of combined ${fmt$(combined)}.`});
+    }
+  }
+
+  // Shopify-only opportunities (biggest ones)
+  const shopOnly = [];
+  for (const g of allG){
+    const a = aMap[g] || {rev:0}; const s = sMap[g] || {rev:0};
+    if (a.rev === 0 && s.rev >= 500 && g !== "(no genus)") shopOnly.push({g, sRev: s.rev});
+  }
+  shopOnly.sort((a,b) => b.sRev - a.sRev);
+  if (shopOnly.length){
+    const shopOnlyTotal = shopOnly.reduce((s,x) => s+x.sRev, 0);
+    insights.push({icon:"🚀", title:`${shopOnly.length} genera not on Amazon`, body:
+      `Total Shopify revenue in the gap: <strong>${fmt$(shopOnlyTotal)}</strong>. Biggest launches to consider:<br>` +
+      shopOnly.slice(0, 5).map(x => `<strong>${x.g}</strong> — ${fmt$(x.sRev)} on Shopify`).join("<br>")});
+  }
+
+  // Amazon-strong genera
+  const strong = [];
+  for (const g of allG){
+    const a = aMap[g] || {rev:0}; const s = sMap[g] || {rev:0};
+    if (s.rev >= 500 && a.rev/s.rev > 0.20 && g !== "(no genus)") strong.push({g, ratio: a.rev/s.rev, a: a.rev, s: s.rev});
+  }
+  strong.sort((a,b) => b.ratio - a.ratio);
+  if (strong.length){
+    insights.push({icon:"⭐", title:`${strong.length} genera perform well on Amazon`, body:
+      "Amazon revenue > 20% of Shopify — worth PPC investment:<br>" +
+      strong.slice(0, 5).map(x =>
+      `<strong>${x.g}</strong> — Amazon ${pctFmt(x.ratio)} of Shopify (${fmt$(x.a)} vs ${fmt$(x.s)})`).join("<br>")});
+  }
+
+  return insights;
+}
+
+function renderCrossInsights(aSnap, sSnap, overlap){
+  const el = document.getElementById("cross-insights");
+  if (!el) return;
+  if (!aSnap || !sSnap){ el.style.display = "none"; return; }
+  const insights = generateCrossInsights(aSnap, sSnap, overlap);
+  if (!insights.length){ el.style.display = "none"; return; }
+  el.style.display = "block";
+  el.innerHTML = `
+    <div class="panel-h"><h2>💡 Insights <span class="pill">${insights.length}</span></h2></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px">
+      ${insights.map(i => `
+        <div style="border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:#fbfefb">
+          <div style="font-weight:600;color:var(--accent);margin-bottom:4px">${i.icon} ${i.title}</div>
+          <div style="font-size:13px;line-height:1.5">${i.body}</div>
+        </div>`).join('')}
+    </div>`;
 }
 
 // ============================================================
