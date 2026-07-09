@@ -74,15 +74,21 @@ function labelFromDates(start, end){
 }
 function parseAmazon(rows, ws){
   const products = [];
+  const header = (rows[0] || []).map(x => String(x || '').toLowerCase().trim());
+  // Detect format
+  const isBusinessReport = header.some(h => h.includes('sessions - total')) ||
+                            header.some(h => h.includes('(child) asin'));
+  const isMetricData = header.some(h => h.includes('glance views')) &&
+                        header.some(h => h.includes('available inventory'));
+
   function asinFromCell(cellRef){
+    if (!ws) return "";
     const c = ws[cellRef];
     if (!c) return "";
-    // HYPERLINK formula: look at f for ASIN
     if (c.f){
       const m = c.f.match(/[A-Z0-9]{10}/g);
       if (m && m.length) return m[m.length - 1];
     }
-    // Or the cell's raw value / display might contain it
     for (const k of ['v','w','h']){
       if (c[k] && typeof c[k] === 'string'){
         const m = c[k].match(/\b[A-Z0-9]{10}\b/);
@@ -94,19 +100,46 @@ function parseAmazon(rows, ws){
   function num(x){
     if (typeof x === 'number') return x;
     if (x == null || x === '') return 0;
-    const s = String(x).replace(/[,$\s%]/g, '');
+    const s = String(x).replace(/[,$\s]/g, '').replace(/%$/, '');
     const n = parseFloat(s);
     return isNaN(n) ? 0 : n;
   }
+
+  // ============ Format 1: Business Report (22 cols, from Seller Central) ============
+  if (isBusinessReport){
+    // Columns: (Parent) ASIN | (Child) ASIN | Title | SKU | Sessions - Total | ...
+    // Units Ordered = col 14, Unit Session % = col 16, Ordered Product Sales = col 18
+    for (let i = 1; i < rows.length; i++){
+      const r = rows[i]; if (!r) continue;
+      // Skip empty/total rows
+      const childAsin = String(r[1] || '').trim();
+      const parentAsin = String(r[0] || '').trim();
+      const title = String(r[2] || '').trim();
+      if (!title && !childAsin) continue;
+      if (title.toLowerCase() === 'total') continue;
+      const asin = childAsin || parentAsin;
+      const sessions = num(r[4]);          // Sessions - Total
+      const pageViews = num(r[8]);         // Page Views - Total
+      const glance = pageViews || sessions;  // Use page views if available, else sessions
+      const units = num(r[14]);            // Units Ordered
+      let conv = num(r[16]);               // Unit Session Percentage
+      if (conv > 1) conv = conv / 100;     // Normalize percent → decimal
+      const rev = num(r[18]);              // Ordered Product Sales
+      const avg = units > 0 ? rev / units : 0;
+      products.push({asin, title, glance, conv, units, avg, rev, inv: 0,
+                     genus: detectGenus(title) || "(no genus)"});
+    }
+    return products;
+  }
+
+  // ============ Format 2: Original metric-data (8 cols) ============
   for (let i = 1; i < rows.length; i++){
     const r = rows[i]; if (!r) continue;
-    // Skip the Shopify-style 'Total' summary row Amazon also has at row index 1
     if (String(r[0] || '').trim() === "Total") continue;
     const title = String(r[1] || "").trim();
     if (!title || title === "Item name") continue;
     const cellRef = XLSX.utils.encode_cell({c: 0, r: i});
     const raw = String(r[0] || '').trim();
-    // ASIN can be plain text (CSV) or a HYPERLINK formula (xlsx)
     const asinFromCellRef = asinFromCell(cellRef);
     let asin = asinFromCellRef;
     if (!asin) {
@@ -114,13 +147,15 @@ function parseAmazon(rows, ws){
       asin = m ? m[0] : raw;
     }
     let glance = num(r[2]);
-    let conv   = num(r[3]);
-    if (conv > 1) conv = conv / 100; // if stored as 2.98 instead of 0.0298
+    let conv = num(r[3]);
+    if (conv > 1) conv = conv / 100;
     const units = num(r[4]), avg = num(r[5]), rev = num(r[6]), inv = num(r[7]);
-    products.push({asin, title, glance, conv, units, avg, rev, inv, genus: detectGenus(title) || "(no genus)"});
+    products.push({asin, title, glance, conv, units, avg, rev, inv,
+                   genus: detectGenus(title) || "(no genus)"});
   }
   return products;
 }
+
 function parseShopify(rows){
   function num(x){
     if (typeof x === 'number') return x;
