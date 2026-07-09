@@ -105,7 +105,14 @@ function parseAmazon(rows, ws){
     const title = String(r[1] || "").trim();
     if (!title || title === "Item name") continue;
     const cellRef = XLSX.utils.encode_cell({c: 0, r: i});
-    const asin = asinFromCell(cellRef) || String(r[0] || '').trim();
+    const raw = String(r[0] || '').trim();
+    // ASIN can be plain text (CSV) or a HYPERLINK formula (xlsx)
+    const asinFromCellRef = asinFromCell(cellRef);
+    let asin = asinFromCellRef;
+    if (!asin) {
+      const m = raw.match(/[A-Z0-9]{10}/);
+      asin = m ? m[0] : raw;
+    }
     let glance = num(r[2]);
     let conv   = num(r[3]);
     if (conv > 1) conv = conv / 100; // if stored as 2.98 instead of 0.0298
