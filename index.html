@@ -117,6 +117,7 @@
     <button class="tab-btn" data-tab="external">🏪 External Stores</button>
     <span style="width:1px;background:var(--border);align-self:stretch;margin:0 4px"></span>
     <button class="tab-btn" data-tab="cross">⇆ Cross-channel</button>
+    <button class="tab-btn" data-tab="ovm">⇆ Owned vs Market</button>
     <button class="tab-btn" data-tab="oppmap">🎯 Opportunity Map</button>
   </div>
   <button class="tab" id="manage-btn">⚙ Manage snapshots</button>
@@ -394,6 +395,46 @@
   </div>
 </div>
 
+<div class="tab-panel" id="tab-ovm">
+  <div class="picker">
+    <label>Owned (Amazon)</label><select id="ovm-amazon-select"></select>
+    <label>Owned (Shopify)</label><select id="ovm-shopify-select"></select>
+    <label>Market (External)</label><select id="ovm-external-select"></select>
+    <label>Store filter</label><select id="ovm-store-filter" title="Narrow market side to a specific external store"></select>
+    <div class="right">
+      <button class="tab" id="ovm-preset-amazon" title="Compare your Amazon vs MCG Amazon head-to-head">Amazon head-to-head</button>
+      <button class="tab" id="ovm-preset-all">All market</button>
+      <button class="tab" id="ovm-download">&#8595; Download comparison</button>
+    </div>
+  </div>
+  <div class="banner" id="ovm-banner"></div>
+  <div id="ovm-empty" class="empty" style="display:block">
+    Pick an Owned snapshot (Amazon and/or Shopify) plus a Market (External Stores) snapshot to see the side-by-side comparison.
+  </div>
+  <div id="ovm-content" style="display:none">
+    <div class="grid cards" id="ovm-cards"></div>
+    <div class="panel">
+      <div class="panel-h"><h2>Top 25 genera &mdash; Owned vs Market</h2></div>
+      <div class="chart-box"><canvas id="ovm-chart"></canvas></div>
+    </div>
+    <div class="panel">
+      <div class="panel-h">
+        <h2>Per-genus comparison <span class="pill" id="ovm-count"></span></h2>
+        <div class="actions">
+          <span class="small">Show:</span>
+          <button class="tab active" data-ovm-filter="all">All</button>
+          <button class="tab" data-ovm-filter="owned-only">You only</button>
+          <button class="tab" data-ovm-filter="market-only">Market only</button>
+          <button class="tab" data-ovm-filter="both">Both selling</button>
+        </div>
+      </div>
+      <div class="filterbar"><input id="ovm-search" placeholder="Search genus..."></div>
+      <div class="scroll"><table><thead><tr id="ovm-thead"></tr></thead><tbody id="ovm-tbody"></tbody></table></div>
+      <div class="small" style="margin-top:6px">Market revenue is estimated via unit-share of order totals. Click any row to see it in the Opportunity Map with signal + action.</div>
+    </div>
+  </div>
+</div>
+
 <div class="tab-panel" id="tab-cross">
   <div class="picker">
     <label>Amazon</label><select id="cross-amazon-select"></select>
@@ -429,7 +470,7 @@
 
 <div class="modal" id="manage-modal">
   <div class="modal-box">
-    <p class="small">These are stored in your browser only. Clearing browser data or using a different device/browser will lose them.</p>
+    <h2>Saved snapshots</h2>
     <div id="manage-body"></div>
     <div class="right"><button class="tab" id="manage-close">Close</button></div>
   </div>
