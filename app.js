@@ -424,6 +424,7 @@ function renderTab(source){
   if (source === "cross") return renderCross();
   if (source === "external") return renderExternal();
   if (source === "oppmap") return renderOppMap();
+  if (source === "ovm") return renderOwnedVsMarket();
   const tabState = state[source];
   const snaps = snapshotsFor(source);
   // Render the snapshot picker
@@ -1707,7 +1708,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.tab-btn').forEach(b =>
     b.addEventListener('click', () => switchTab(b.dataset.tab)));
   setupDropzone('amazon'); setupDropzone('shopify'); setupDropzone('external');
-  setupExternalHandlers(); setupOppMapHandlers();
+  setupExternalHandlers(); setupOppMapHandlers(); setupOwnedVsMarketHandlers();
   for (const src of ['amazon','shopify']) {
     document.getElementById(`${src}-snap-select`).addEventListener('change', e => {
       state[src].snapshotId = e.target.value || null;
@@ -1770,6 +1771,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (amazonLatest) state.oppmap.amazonId = amazonLatest.id;
     if (shopifyLatest) state.oppmap.shopifyId = shopifyLatest.id;
     if (externalLatest) state.oppmap.externalId = externalLatest.id;
+    if (amazonLatest) state.ovm.amazonId = amazonLatest.id;
+    if (shopifyLatest) state.ovm.shopifyId = shopifyLatest.id;
+    if (externalLatest) state.ovm.externalId = externalLatest.id;
   }
   switchTab('amazon');
 });
@@ -1788,6 +1792,9 @@ state.external = { snapshotId: null, mode: 'single', compareId: null,
 state.oppmap   = { amazonId: null, shopifyId: null, externalId: null,
                    sigFilter: 'all', softThreshold: 25,
                    storeFilter: 'all', storeGroupByParent: true };
+state.ovm      = { amazonId: null, shopifyId: null, externalId: null,
+                   storeFilter: 'all', storeGroupByParent: true,
+                   rowFilter: 'all', sort: {col: 4, dir: 'desc'}, chart: null };
 state.topPlants.external = { threshold: 10, sortCol: null, sortDir: 'desc' };
 state.genusSort.external = { col: 1, dir: 'desc' };  // 1 = units desc
 
@@ -2529,4 +2536,242 @@ function setupOppMapHandlers() {
       });
     })(sigBtns[i]);
   }
+}
+
+// ============================================================
+// OWNED vs MARKET (side-by-side comparison tab)
+// ============================================================
+function computeOwnedVsMarket() {
+  var s = state.ovm;
+  var am = s.amazonId ? snapshots.find(function(x){return x.id===s.amazonId}) : null;
+  var sh = s.shopifyId ? snapshots.find(function(x){return x.id===s.shopifyId}) : null;
+  var ex = s.externalId ? snapshots.find(function(x){return x.id===s.externalId}) : null;
+  if ((!am && !sh) || !ex) return null;
+
+  // Owned by genus
+  var owned = {};
+  function addOwned(products, channel) {
+    for (var i = 0; i < products.length; i++) {
+      var p = products[i];
+      var g = p.genus || "(no genus)";
+      if (!(g in owned)) owned[g] = {genus: g, amazon: 0, shopify: 0, units: 0};
+      owned[g][channel] += p.rev;
+      owned[g].units += p.units;
+    }
+  }
+  if (am) addOwned(am.products, "amazon");
+  if (sh) addOwned(sh.products, "shopify");
+
+  // Market by genus (respect store filter)
+  var extProducts = ex.products;
+  if (s.storeFilter && s.storeFilter !== "all") {
+    extProducts = extProducts.filter(function(p){
+      return s.storeGroupByParent ? p.store === s.storeFilter : p.rawStore === s.storeFilter;
+    });
+  }
+  var extAgg = aggregateExternalByGenus(extProducts);
+  var extMap = {};
+  for (var i = 0; i < extAgg.length; i++) extMap[extAgg[i].genus] = extAgg[i];
+
+  // Combine
+  var seen = {};
+  var rows = [];
+  for (var g in owned) seen[g] = true;
+  for (var g in extMap) seen[g] = true;
+  for (var g in seen) {
+    if (g === "(no genus)") continue;
+    var o = owned[g] || {amazon: 0, shopify: 0, units: 0};
+    var m = extMap[g] || {units: 0, estRev: 0, orders: 0};
+    var yourRev = o.amazon + o.shopify;
+    var mktRev = m.estRev;
+    var totalRev = yourRev + mktRev;
+    var marketShare = totalRev > 0 ? mktRev / totalRev : 0;
+    rows.push({
+      genus: g, type: getType(g) || "",
+      amazon: o.amazon, shopify: o.shopify, yourRev: yourRev,
+      mktUnits: m.units, mktRev: mktRev, mktOrders: m.orders,
+      marketShare: marketShare,
+      status: yourRev > 0 && mktRev > 0 ? "both" : (yourRev > 0 ? "owned-only" : "market-only")
+    });
+  }
+  rows.sort(function(a, b){ return (b.yourRev + b.mktRev) - (a.yourRev + a.mktRev); });
+  return {rows: rows, am: am, sh: sh, ex: ex, extProducts: extProducts};
+}
+
+function renderOwnedVsMarket() {
+  var s = state.ovm;
+  // Populate select dropdowns
+  var amSnaps = snapshotsFor("amazon"), shSnaps = snapshotsFor("shopify"), exSnaps = snapshotsFor("external");
+  function fill(id, snaps, cur) {
+    document.getElementById(id).innerHTML = '<option value="">-- None --</option>' +
+      snaps.map(function(sn){return '<option value="' + sn.id + '" ' + (sn.id === cur ? "selected" : "") + '>' + sn.label + '</option>';}).join("");
+  }
+  fill("ovm-amazon-select", amSnaps, s.amazonId);
+  fill("ovm-shopify-select", shSnaps, s.shopifyId);
+  fill("ovm-external-select", exSnaps, s.externalId);
+
+  // Store filter dropdown
+  var exSnap = s.externalId ? snapshots.find(function(x){return x.id===s.externalId}) : null;
+  var storeSel = document.getElementById("ovm-store-filter");
+  if (exSnap) {
+    var stores = aggregateExternalByStore(exSnap.products, s.storeGroupByParent);
+    storeSel.innerHTML = '<option value="all">All external stores</option>' +
+      stores.map(function(st){return '<option value="' + st.store + '" ' + (st.store === s.storeFilter ? "selected" : "") + '>' + st.store + ' (' + fmt$(st.rev) + ')</option>';}).join("");
+  } else {
+    storeSel.innerHTML = '<option value="all">All external stores</option>';
+  }
+
+  var data = computeOwnedVsMarket();
+  if (!data) {
+    document.getElementById("ovm-content").style.display = "none";
+    document.getElementById("ovm-empty").style.display = "block";
+    document.getElementById("ovm-banner").innerHTML = "";
+    return;
+  }
+  document.getElementById("ovm-content").style.display = "block";
+  document.getElementById("ovm-empty").style.display = "none";
+
+  var parts = [];
+  if (data.am) parts.push('Amazon <strong>' + data.am.label + '</strong>');
+  if (data.sh) parts.push('Shopify <strong>' + data.sh.label + '</strong>');
+  var mkt = (s.storeFilter && s.storeFilter !== "all")
+    ? '<strong>' + s.storeFilter + '</strong> (' + data.ex.label + ')'
+    : 'Market <strong>' + data.ex.label + '</strong>';
+  parts.push("vs " + mkt);
+  document.getElementById("ovm-banner").innerHTML = parts.join(" + ");
+
+  // Summary cards
+  var totalOwned = data.rows.reduce(function(a, r){return a + r.yourRev;}, 0);
+  var totalMkt = data.rows.reduce(function(a, r){return a + r.mktRev;}, 0);
+  var overlap = data.rows.filter(function(r){return r.status === "both";}).length;
+  var ownedOnly = data.rows.filter(function(r){return r.status === "owned-only";}).length;
+  var mktOnly = data.rows.filter(function(r){return r.status === "market-only";}).length;
+  document.getElementById("ovm-cards").innerHTML = [
+    '<div class="card"><div class="label">Your revenue</div><div class="value" style="color:#2e7d32">' + fmt$(totalOwned) + '</div></div>',
+    '<div class="card"><div class="label">Market revenue (est.)</div><div class="value" style="color:#e65100">' + fmt$(totalMkt) + '</div></div>',
+    '<div class="card"><div class="label">Both selling</div><div class="value">' + fmtN(overlap) + '</div></div>',
+    '<div class="card"><div class="label">You only</div><div class="value">' + fmtN(ownedOnly) + '</div></div>',
+    '<div class="card"><div class="label">Market only</div><div class="value">' + fmtN(mktOnly) + '</div></div>'
+  ].join("");
+
+  // Grouped bar chart: top 25 by combined revenue
+  var chartItems = data.rows.slice(0, 25);
+  var ctx = document.getElementById("ovm-chart").getContext("2d");
+  if (state.ovm.chart) state.ovm.chart.destroy();
+  state.ovm.chart = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: chartItems.map(function(r){return r.genus;}),
+      datasets: [
+        {label: "Your revenue", data: chartItems.map(function(r){return r.yourRev;}), backgroundColor: "#2e7d32"},
+        {label: "Market rev (est.)", data: chartItems.map(function(r){return r.mktRev;}), backgroundColor: "#ff9800"}
+      ]
+    },
+    options: {indexAxis: "y", responsive: true, maintainAspectRatio: false,
+      plugins: {legend: {display: true, position: "top"},
+        tooltip: {callbacks: {label: function(c){return c.dataset.label + ": " + fmt$(c.parsed.x);}}}},
+      scales: {x: {ticks: {callback: fmtAxis}}}}
+  });
+
+  // Table
+  var search = (document.getElementById("ovm-search").value || "").toLowerCase();
+  var filtered = data.rows;
+  if (s.rowFilter !== "all") filtered = filtered.filter(function(r){return r.status === s.rowFilter;});
+  if (search) filtered = filtered.filter(function(r){return r.genus.toLowerCase().indexOf(search) >= 0;});
+
+  var cols = [
+    {label: "Genus", k: "genus"},
+    {label: "Type", k: "type"},
+    {label: "Your Amazon", k: "amazon", num: true, fmt: fmt$},
+    {label: "Your Shopify", k: "shopify", num: true, fmt: fmt$},
+    {label: "Your total", k: "yourRev", num: true, fmt: fmt$},
+    {label: "Market units", k: "mktUnits", num: true, fmt: fmtN},
+    {label: "Market rev (est.)", k: "mktRev", num: true, fmt: fmt$},
+    {label: "Market share", k: "marketShare", num: true, fmt: function(v){return (v*100).toFixed(1) + "%";}}
+  ];
+  var ss = state.ovm.sort;
+  filtered.sort(function(a, b){
+    var kv = cols[ss.col].k, dir = ss.dir === "asc" ? 1 : -1;
+    if (kv === "genus" || kv === "type") return String(a[kv]).localeCompare(String(b[kv])) * dir;
+    return ((a[kv] || 0) > (b[kv] || 0) ? 1 : (a[kv] || 0) < (b[kv] || 0) ? -1 : 0) * dir;
+  });
+  document.getElementById("ovm-thead").innerHTML = cols.map(function(c, i){
+    return '<th class="' + (c.num ? "num" : "") + '" data-ovm-sort="' + i + '">' + c.label + (i === ss.col ? (ss.dir === "asc" ? " ▲" : " ▼") : "") + '</th>';
+  }).join("");
+  document.getElementById("ovm-tbody").innerHTML = filtered.map(function(r){
+    var typeBadge = r.type ? '<span class="badge type-' + r.type.toLowerCase().replace(/\s/g, "") + '">' + r.type + '</span>' : "";
+    return "<tr>" + cols.map(function(c){
+      if (c.k === "type") return "<td>" + typeBadge + "</td>";
+      return '<td class="' + (c.num ? "num" : "") + '">' + (c.fmt ? c.fmt(r[c.k] || 0) : (r[c.k] || "")) + '</td>';
+    }).join("") + "</tr>";
+  }).join("");
+  document.getElementById("ovm-count").textContent = filtered.length + " genera";
+  document.getElementById("ovm-thead").querySelectorAll("[data-ovm-sort]").forEach(function(th){
+    th.addEventListener("click", function(){
+      var idx = +th.dataset.ovmSort;
+      if (ss.col === idx) ss.dir = ss.dir === "asc" ? "desc" : "asc";
+      else { ss.col = idx; ss.dir = "desc"; }
+      renderOwnedVsMarket();
+    });
+  });
+}
+
+function setupOwnedVsMarketHandlers() {
+  document.getElementById("ovm-amazon-select").addEventListener("change", function(e){
+    state.ovm.amazonId = e.target.value || null; renderOwnedVsMarket();
+  });
+  document.getElementById("ovm-shopify-select").addEventListener("change", function(e){
+    state.ovm.shopifyId = e.target.value || null; renderOwnedVsMarket();
+  });
+  document.getElementById("ovm-external-select").addEventListener("change", function(e){
+    state.ovm.externalId = e.target.value || null;
+    state.ovm.storeFilter = "all";
+    renderOwnedVsMarket();
+  });
+  document.getElementById("ovm-store-filter").addEventListener("change", function(e){
+    state.ovm.storeFilter = e.target.value || "all"; renderOwnedVsMarket();
+  });
+  document.getElementById("ovm-preset-amazon").addEventListener("click", function(){
+    state.ovm.storeGroupByParent = false;
+    state.ovm.storeFilter = "Amazon (MCG)";
+    renderOwnedVsMarket();
+  });
+  document.getElementById("ovm-preset-all").addEventListener("click", function(){
+    state.ovm.storeGroupByParent = true;
+    state.ovm.storeFilter = "all";
+    renderOwnedVsMarket();
+  });
+  document.getElementById("ovm-search").addEventListener("input", renderOwnedVsMarket);
+  document.getElementById("ovm-download").addEventListener("click", downloadOwnedVsMarket);
+  var btns = document.querySelectorAll("#tab-ovm [data-ovm-filter]");
+  for (var i = 0; i < btns.length; i++) {
+    (function(btn){
+      btn.addEventListener("click", function(){
+        state.ovm.rowFilter = btn.dataset.ovmFilter;
+        var all = document.querySelectorAll("#tab-ovm [data-ovm-filter]");
+        for (var j = 0; j < all.length; j++) all[j].classList.toggle("active", all[j] === btn);
+        renderOwnedVsMarket();
+      });
+    })(btns[i]);
+  }
+}
+
+function downloadOwnedVsMarket() {
+  var data = computeOwnedVsMarket();
+  if (!data) return;
+  var rows = data.rows.map(function(r){
+    return {
+      Genus: r.genus, Type: r.type,
+      "Your Shopify": r.shopify.toFixed(2),
+      "Your Total": r.yourRev.toFixed(2),
+      "Market Units": r.mktUnits,
+      "Market Rev (est.)": r.mktRev.toFixed(2),
+      "Market Share": (r.marketShare * 100).toFixed(1) + "%",
+      Status: r.status
+    };
+  });
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Owned vs Market");
+  var label = (data.ex.label || "").replace(/\s+/g, "");
+  XLSX.writeFile(wb, "owned-vs-market-" + label + ".xlsx");
 }
