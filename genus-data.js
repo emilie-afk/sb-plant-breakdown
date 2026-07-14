@@ -101,14 +101,3 @@ function getItemType(genus, title){
   if (!genus || genus === "(no genus)") return detectNonPlantType(title);
   return "";
 }
-rintable|chart)\b/.test(t)) return "Merchandise";
-  return "Other";
-}
-
-// Combined: returns plant type if a genus is set, otherwise classifies non-plant items by title.
-function getItemType(genus, title){
-  var pt = getType(genus);
-  if (pt) return pt;
-  if (!genus || genus === "(no genus)") return detectNonPlantType(title);
-  return "";
-}
