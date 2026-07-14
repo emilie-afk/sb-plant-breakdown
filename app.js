@@ -20,14 +20,18 @@ let showNonPlant = false;
 // ============================================================
 const STORAGE_KEY_LZ = STORAGE_KEY + "-lz";
 function loadSnapshots(){
+  // Try LZ compressed first; on any failure, fall back to legacy raw key.
   try {
-    // Prefer compressed form
     const lz = localStorage.getItem(STORAGE_KEY_LZ);
     if (lz && typeof LZString !== "undefined") {
-      const raw = LZString.decompressFromUTF16(lz);
-      if (raw) return JSON.parse(raw);
+      try {
+        const raw = LZString.decompressFromUTF16(lz);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length) return parsed;
+        }
+      } catch(inner) { console.warn("LZ decompression failed, trying legacy:", inner); }
     }
-    // Legacy uncompressed
     const raw = localStorage.getItem(STORAGE_KEY);
     return raw ? JSON.parse(raw) : [];
   } catch(e){ console.warn("Failed to load snapshots:", e); return []; }
@@ -38,15 +42,24 @@ function _snapshotSize(s) {
 }
 function saveSnapshots(){
   const json = JSON.stringify(snapshots);
-  // Compress if LZ-string is loaded, else fall back to raw
-  const packed = (typeof LZString !== "undefined")
-    ? LZString.compressToUTF16(json)
-    : null;
+  const lzOk = (typeof LZString !== "undefined");
+  const packed = lzOk ? LZString.compressToUTF16(json) : null;
   try {
     if (packed) {
       localStorage.setItem(STORAGE_KEY_LZ, packed);
-      // Best-effort cleanup of the legacy key
-      try { localStorage.removeItem(STORAGE_KEY); } catch(_) {}
+      // VERIFY the round-trip actually restores the same data before wiping legacy.
+      // Only remove legacy if we can confirm the LZ blob is decodable.
+      let verified = false;
+      try {
+        const check = LZString.decompressFromUTF16(localStorage.getItem(STORAGE_KEY_LZ));
+        if (check === json) verified = true;
+      } catch(_){}
+      if (verified) {
+        try { localStorage.removeItem(STORAGE_KEY); } catch(_) {}
+      } else {
+        // LZ round-trip failed — keep legacy raw as authoritative backup
+        try { localStorage.setItem(STORAGE_KEY, json); } catch(_) {}
+      }
     } else {
       localStorage.setItem(STORAGE_KEY, json);
     }
@@ -1213,6 +1226,7 @@ function renderCross(){
   }));
   renderOpportunities(cross, overlap);
   renderCrossInsights(aSnap, sSnap, overlap);
+  renderCrossPlantPanel();
 }
 
 function renderOpportunities(cross, overlap){
@@ -1708,7 +1722,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.tab-btn').forEach(b =>
     b.addEventListener('click', () => switchTab(b.dataset.tab)));
   setupDropzone('amazon'); setupDropzone('shopify'); setupDropzone('external');
-  setupExternalHandlers(); setupOppMapHandlers(); setupOwnedVsMarketHandlers();
+  setupExternalHandlers(); setupOppMapHandlers(); setupOwnedVsMarketHandlers(); setupPlantOppHandlers(); setupExtraSkuHandlers();
   for (const src of ['amazon','shopify']) {
     document.getElementById(`${src}-snap-select`).addEventListener('change', e => {
       state[src].snapshotId = e.target.value || null;
@@ -1791,8 +1805,12 @@ state.external = { snapshotId: null, mode: 'single', compareId: null,
                    topThreshold: 10, chart: null };
 state.oppmap   = { amazonId: null, shopifyId: null, externalId: null,
                    sigFilter: 'all', softThreshold: 25,
-                   storeFilter: 'all', storeGroupByParent: true };
-state.ovm      = { amazonId: null, shopifyId: null, externalId: null,
+                   storeFilter: 'all', storeGroupByParent: true,
+                   plantFilter: 'all', plantThreshold: 10,
+                   plantSort: {col: 3, dir: 'desc'} };
+state.ovm      = { plantFilter: 'all', plantThreshold: 10,
+                   crossPlantFilter: 'all',
+                   amazonId: null, shopifyId: null, externalId: null,
                    storeFilter: 'all', storeGroupByParent: true,
                    rowFilter: 'all', sort: {col: 4, dir: 'desc'}, chart: null };
 state.topPlants.external = { threshold: 10, sortCol: null, sortDir: 'desc' };
@@ -2356,6 +2374,8 @@ function renderOppMap() {
     }).join('')}</tr>`;
   }).join('');
   document.getElementById('oppmap-count').textContent = filtered.length + ' genera';
+  // Also render the per-plant panel below
+  renderPlantOpportunities();
 }
 
 // ============================================================
@@ -2714,6 +2734,8 @@ function renderOwnedVsMarket() {
       renderOwnedVsMarket();
     });
   });
+  // Also render the SKU / plant panel
+  renderOvmPlantPanel();
 }
 
 function setupOwnedVsMarketHandlers() {
@@ -2762,6 +2784,7 @@ function downloadOwnedVsMarket() {
   var rows = data.rows.map(function(r){
     return {
       Genus: r.genus, Type: r.type,
+      "Your Amazon": r.amazon.toFixed(2),
       "Your Shopify": r.shopify.toFixed(2),
       "Your Total": r.yourRev.toFixed(2),
       "Market Units": r.mktUnits,
@@ -2774,4 +2797,422 @@ function downloadOwnedVsMarket() {
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Owned vs Market");
   var label = (data.ex.label || "").replace(/\s+/g, "");
   XLSX.writeFile(wb, "owned-vs-market-" + label + ".xlsx");
+}
+
+// ============================================================
+// PLANT-LEVEL (SKU) OPPORTUNITIES for Opportunity Map
+// ============================================================
+
+// Normalize a plant title for cross-channel matching.
+// Lowercase, strip punctuation, drop noise words, keep first meaningful terms.
+function normPlantTitle(t) {
+  if (!t) return "";
+  var s = String(t).toLowerCase();
+  // Strip content in parentheses/brackets
+  s = s.replace(/\([^)]*\)/g, " ").replace(/\[[^\]]*\]/g, " ");
+  // Drop common marketing/format noise
+  s = s.replace(/\b(live plant|live plants|in \d+ inch pot|inch pot|inch pots|potted|starter|cutting|cuttings|variety pack|bulk pack|pack|plants|plant|bare root|large|small|mini|xl)\b/g, " ");
+  // Strip punctuation
+  s = s.replace(/[^a-z0-9\s]/g, " ");
+  // Collapse whitespace
+  s = s.replace(/\s+/g, " ").trim();
+  return s;
+}
+
+// Build an index of Owned plant titles for fast lookup
+function buildOwnedTitleIndex() {
+  var s = state.oppmap;
+  var owned = new Map(); // normalized title -> {sources:{amazon,shopify}, titles:[...], rev, units}
+  function add(products, channel) {
+    for (var i = 0; i < products.length; i++) {
+      var p = products[i];
+      var key = normPlantTitle(p.title);
+      if (!key || key.length < 3) continue;
+      if (!owned.has(key)) owned.set(key, {sources:{}, titles:[], rev:0, units:0});
+      var rec = owned.get(key);
+      rec.sources[channel] = true;
+      if (rec.titles.indexOf(p.title) < 0 && rec.titles.length < 3) rec.titles.push(p.title);
+      rec.rev += (p.rev || 0);
+      rec.units += (p.units || 0);
+    }
+  }
+  var am = s.amazonId ? snapshots.find(function(x){return x.id===s.amazonId;}) : null;
+  var sh = s.shopifyId ? snapshots.find(function(x){return x.id===s.shopifyId;}) : null;
+  if (am) add(am.products, "amazon");
+  if (sh) add(sh.products, "shopify");
+  return owned;
+}
+
+// Compute per-plant opportunities from Market side
+function computePlantOpportunities() {
+  var s = state.oppmap;
+  var ex = s.externalId ? snapshots.find(function(x){return x.id===s.externalId;}) : null;
+  if (!ex) return null;
+  var extProducts = ex.products;
+  if (s.storeFilter && s.storeFilter !== "all") {
+    extProducts = extProducts.filter(function(p){
+      return s.storeGroupByParent ? p.store === s.storeFilter : p.rawStore === s.storeFilter;
+    });
+  }
+  var plants = aggregateExternalByPlant(extProducts);
+  var ownedIdx = buildOwnedTitleIndex();
+  var out = [];
+  for (var i = 0; i < plants.length; i++) {
+    var p = plants[i];
+    var key = normPlantTitle(p.title);
+    var match = ownedIdx.get(key);
+    var yourSources = match ? Object.keys(match.sources).join("+") : "";
+    var yourRev = match ? match.rev : 0;
+    var yourUnits = match ? match.units : 0;
+    var status = match ? "both" : "missing";
+    var signal;
+    if (!match) signal = "red";
+    else if (p.units >= yourUnits * 3) signal = "orange";
+    else if (yourUnits >= p.units * 2) signal = "green";
+    else signal = "yellow";
+    var type = getItemType(p.genus, p.title);
+    var isPlant = p.genus && p.genus !== "(no genus)";
+    out.push({
+      title: p.title, sku: p.sku,
+      genus: isPlant ? p.genus : "—",
+      type: type,
+      isPlant: isPlant,
+      mktUnits: p.units, mktRev: p.estRev, mktOrders: p.orders, mktStores: p.storeCount,
+      yourSources: yourSources, yourRev: yourRev, yourUnits: yourUnits,
+      status: status, signal: signal
+    });
+  }
+  return out;
+}
+
+function renderPlantOpportunities() {
+  var rows = computePlantOpportunities();
+  if (!rows) {
+    document.getElementById("oppmap-plant-tbody").innerHTML = '<tr><td colspan="10" class="empty">Load an External snapshot to see plant-level opportunities.</td></tr>';
+    document.getElementById("oppmap-plant-thead").innerHTML = "";
+    document.getElementById("oppmap-plant-count").textContent = "";
+    return;
+  }
+  var s = state.oppmap;
+  var search = (document.getElementById("oppmap-plant-search").value || "").toLowerCase();
+  var filtered = rows.filter(function(r){return r.mktUnits >= s.plantThreshold;});
+  if (s.plantFilter === "missing") filtered = filtered.filter(function(r){return r.status === "missing";});
+  else if (s.plantFilter === "both") filtered = filtered.filter(function(r){return r.status === "both";});
+  if (search) filtered = filtered.filter(function(r){return (r.title || "").toLowerCase().indexOf(search) >= 0 || (r.sku || "").toLowerCase().indexOf(search) >= 0;});
+
+  var cols = [
+    {label: "Plant", k: "title"},
+    {label: "SKU", k: "sku"},
+    {label: "Genus", k: "genus"},
+    {label: "Type", k: "type"},
+    {label: "Mkt units", k: "mktUnits", num: true, fmt: fmtN},
+    {label: "Mkt rev (est.)", k: "mktRev", num: true, fmt: fmt$},
+    {label: "Mkt orders", k: "mktOrders", num: true, fmt: fmtN},
+    {label: "Stores", k: "mktStores", num: true, fmt: fmtN},
+    {label: "You sell it?", k: "status"},
+    {label: "Your units", k: "yourUnits", num: true, fmt: fmtN}
+  ];
+  var ss = s.plantSort;
+  filtered.sort(function(a, b){
+    var kv = cols[ss.col].k, dir = ss.dir === "asc" ? 1 : -1;
+    var av = a[kv], bv = b[kv];
+    if (typeof av === "string") return String(av).localeCompare(String(bv)) * dir;
+    return ((av || 0) > (bv || 0) ? 1 : (av || 0) < (bv || 0) ? -1 : 0) * dir;
+  });
+  document.getElementById("oppmap-plant-thead").innerHTML = cols.map(function(c, i){
+    return '<th class="' + (c.num ? "num" : "") + '" data-plant-sort="' + i + '">' + c.label + (i === ss.col ? (ss.dir === "asc" ? " ▲" : " ▼") : "") + '</th>';
+  }).join("");
+  document.getElementById("oppmap-plant-tbody").innerHTML = filtered.slice(0, 500).map(function(r){
+    var typeBadge = r.type ? '<span class="badge type-' + r.type.toLowerCase().replace(/\s/g, "") + '">' + r.type + '</span>' : "";
+    var statusBadge;
+    if (r.status === "missing") statusBadge = '<span class="badge sig-red">🔴 not found</span>';
+    else statusBadge = '<span class="badge sig-green">🟢 ' + (r.yourSources || "yes") + '</span>';
+    return "<tr>" + cols.map(function(c){
+      if (c.k === "type") return "<td>" + typeBadge + "</td>";
+      if (c.k === "status") return "<td>" + statusBadge + "</td>";
+      return '<td class="' + (c.num ? "num" : "") + '">' + (c.fmt ? c.fmt(r[c.k] || 0) : (r[c.k] || "")) + '</td>';
+    }).join("") + "</tr>";
+  }).join("");
+  document.getElementById("oppmap-plant-count").textContent = filtered.length + " plants";
+  document.getElementById("oppmap-plant-thead").querySelectorAll("[data-plant-sort]").forEach(function(th){
+    th.addEventListener("click", function(){
+      var idx = +th.dataset.plantSort;
+      if (ss.col === idx) ss.dir = ss.dir === "asc" ? "desc" : "asc";
+      else { ss.col = idx; ss.dir = "desc"; }
+      renderPlantOpportunities();
+    });
+  });
+}
+
+function downloadPlantOpportunities() {
+  var rows = computePlantOpportunities();
+  if (!rows) return;
+  var filtered = rows.filter(function(r){return r.mktUnits >= state.oppmap.plantThreshold;});
+  var csv = "Plant,SKU,Genus,Type,Market Units,Market Rev (est.),Market Orders,Stores,You Sell It,Your Sources,Your Units,Your Rev,Status,Signal\n" +
+    filtered.map(function(r){
+      var esc = function(v){var s=String(v==null?"":v);return s.indexOf(",")>=0||s.indexOf('"')>=0 ? '"'+s.replace(/"/g,'""')+'"' : s;};
+      return [esc(r.title), esc(r.sku), esc(r.genus), esc(r.type),
+        r.mktUnits, r.mktRev.toFixed(2), r.mktOrders, r.mktStores,
+        r.status === "both" ? "yes" : "no", esc(r.yourSources), r.yourUnits, r.yourRev.toFixed(2),
+        r.status, r.signal].join(",");
+    }).join("\n");
+  var blob = new Blob([csv], {type: "text/csv"});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  a.href = url; a.download = "plant-opportunities.csv"; a.click();
+  URL.revokeObjectURL(url);
+}
+
+function setupPlantOppHandlers() {
+  document.getElementById("oppmap-plant-search").addEventListener("input", renderPlantOpportunities);
+  document.getElementById("oppmap-plant-download").addEventListener("click", downloadPlantOpportunities);
+  var fBtns = document.querySelectorAll("#tab-oppmap [data-plant-filter]");
+  for (var i = 0; i < fBtns.length; i++) {
+    (function(btn){
+      btn.addEventListener("click", function(){
+        state.oppmap.plantFilter = btn.dataset.plantFilter;
+        var all = document.querySelectorAll("#tab-oppmap [data-plant-filter]");
+        for (var j = 0; j < all.length; j++) all[j].classList.toggle("active", all[j] === btn);
+        renderPlantOpportunities();
+      });
+    })(fBtns[i]);
+  }
+  var tBtns = document.querySelectorAll("#tab-oppmap [data-plant-thresh]");
+  for (var i = 0; i < tBtns.length; i++) {
+    (function(btn){
+      btn.addEventListener("click", function(){
+        state.oppmap.plantThreshold = +btn.dataset.plantThresh;
+        var all = document.querySelectorAll("#tab-oppmap [data-plant-thresh]");
+        for (var j = 0; j < all.length; j++) all[j].classList.toggle("active", all[j] === btn);
+        renderPlantOpportunities();
+      });
+    })(tBtns[i]);
+  }
+}
+
+// ============================================================
+// SHARED: SKU-level plant panel (used by Owned vs Market and Cross-channel)
+// ============================================================
+
+// Compute per-plant/SKU comparison of Owned combined vs Market
+// (mirrors computePlantOpportunities but exposed for Owned vs Market tab)
+function computeOvmPlantRows() {
+  var s = state.ovm;
+  var ex = s.externalId ? snapshots.find(function(x){return x.id===s.externalId;}) : null;
+  var am = s.amazonId ? snapshots.find(function(x){return x.id===s.amazonId;}) : null;
+  var sh = s.shopifyId ? snapshots.find(function(x){return x.id===s.shopifyId;}) : null;
+  if (!ex) return null;
+  var extProducts = ex.products;
+  if (s.storeFilter && s.storeFilter !== "all") {
+    extProducts = extProducts.filter(function(p){
+      return s.storeGroupByParent ? p.store === s.storeFilter : p.rawStore === s.storeFilter;
+    });
+  }
+  // Build owned index by normalized title
+  var owned = new Map();
+  function addOwned(products, channel) {
+    for (var i = 0; i < products.length; i++) {
+      var p = products[i];
+      var key = normPlantTitle(p.title);
+      if (!key || key.length < 3) continue;
+      if (!owned.has(key)) owned.set(key, {sources:{}, titles:[], rev:0, units:0});
+      var rec = owned.get(key);
+      rec.sources[channel] = true;
+      rec.rev += (p.rev || 0);
+      rec.units += (p.units || 0);
+    }
+  }
+  if (am) addOwned(am.products, "amazon");
+  if (sh) addOwned(sh.products, "shopify");
+  var plants = aggregateExternalByPlant(extProducts);
+  var out = [];
+  for (var i = 0; i < plants.length; i++) {
+    var p = plants[i];
+    var key = normPlantTitle(p.title);
+    var match = owned.get(key);
+    var isPlant = p.genus && p.genus !== "(no genus)";
+    var type = getItemType(p.genus, p.title);
+    out.push({
+      title: p.title, sku: p.sku,
+      genus: isPlant ? p.genus : "—",
+      type: type, isPlant: isPlant,
+      mktUnits: p.units, mktRev: p.estRev, mktOrders: p.orders, mktStores: p.storeCount,
+      yourUnits: match ? match.units : 0,
+      yourRev: match ? match.rev : 0,
+      yourSources: match ? Object.keys(match.sources).join("+") : "",
+      status: match ? "both" : "missing"
+    });
+  }
+  return out;
+}
+
+function renderOvmPlantPanel() {
+  var rows = computeOvmPlantRows();
+  var tbody = document.getElementById("ovm-plant-tbody");
+  var thead = document.getElementById("ovm-plant-thead");
+  var count = document.getElementById("ovm-plant-count");
+  if (!tbody) return;
+  if (!rows) {
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">Load an External snapshot to see plant-level comparison.</td></tr>';
+    thead.innerHTML = ""; count.textContent = ""; return;
+  }
+  var s = state.ovm;
+  var search = (document.getElementById("ovm-plant-search").value || "").toLowerCase();
+  var filtered = rows.filter(function(r){return r.mktUnits >= (s.plantThreshold || 10);});
+  if (s.plantFilter === "missing") filtered = filtered.filter(function(r){return r.status === "missing";});
+  else if (s.plantFilter === "both") filtered = filtered.filter(function(r){return r.status === "both";});
+  else if (s.plantFilter === "nonplant") filtered = filtered.filter(function(r){return !r.isPlant;});
+  if (search) filtered = filtered.filter(function(r){return (r.title||"").toLowerCase().indexOf(search)>=0 || (r.sku||"").toLowerCase().indexOf(search)>=0;});
+  filtered.sort(function(a, b){return b.mktUnits - a.mktUnits;});
+
+  var cols = [
+    {label: "Plant / Item", k: "title"},
+    {label: "SKU", k: "sku"},
+    {label: "Genus", k: "genus"},
+    {label: "Type", k: "type"},
+    {label: "Mkt units", k: "mktUnits", num: true, fmt: fmtN},
+    {label: "Mkt rev (est.)", k: "mktRev", num: true, fmt: fmt$},
+    {label: "You sell it?", k: "status"},
+    {label: "Your units", k: "yourUnits", num: true, fmt: fmtN},
+    {label: "Your rev", k: "yourRev", num: true, fmt: fmt$}
+  ];
+  thead.innerHTML = cols.map(function(c){return '<th class="' + (c.num?"num":"") + '">' + c.label + '</th>';}).join("");
+  tbody.innerHTML = filtered.slice(0, 500).map(function(r){
+    var typeBadge = r.type ? '<span class="badge type-' + r.type.toLowerCase().replace(/[\s\/]/g,"") + '">' + r.type + '</span>' : "";
+    var statusBadge = r.status === "missing"
+      ? '<span class="badge sig-red">🔴 not found</span>'
+      : '<span class="badge sig-green">🟢 ' + (r.yourSources || "yes") + '</span>';
+    return "<tr>" + cols.map(function(c){
+      if (c.k === "type") return "<td>" + typeBadge + "</td>";
+      if (c.k === "status") return "<td>" + statusBadge + "</td>";
+      return '<td class="' + (c.num?"num":"") + '">' + (c.fmt ? c.fmt(r[c.k] || 0) : (r[c.k] || "")) + '</td>';
+    }).join("") + "</tr>";
+  }).join("");
+  count.textContent = filtered.length + " items";
+}
+
+// Cross-channel plant panel: Amazon vs Shopify per SKU
+function computeCrossPlantRows() {
+  var am = state.cross.amazonId ? snapshots.find(function(x){return x.id===state.cross.amazonId;}) : null;
+  var sh = state.cross.shopifyId ? snapshots.find(function(x){return x.id===state.cross.shopifyId;}) : null;
+  if (!am && !sh) return null;
+  var byTitle = new Map();
+  function add(products, channel) {
+    for (var i = 0; i < products.length; i++) {
+      var p = products[i];
+      var key = normPlantTitle(p.title);
+      if (!key || key.length < 3) continue;
+      if (!byTitle.has(key)) byTitle.set(key, {title: p.title, sku: p.asin || "", genus: p.genus || "(no genus)",
+                                                amazon: {rev:0, units:0}, shopify: {rev:0, units:0}});
+      var rec = byTitle.get(key);
+      rec[channel].rev += (p.rev || 0);
+      rec[channel].units += (p.units || 0);
+      if (!rec.sku && p.asin) rec.sku = p.asin;
+      if (rec.genus === "(no genus)" && p.genus && p.genus !== "(no genus)") rec.genus = p.genus;
+    }
+  }
+  if (am) add(am.products, "amazon");
+  if (sh) add(sh.products, "shopify");
+  var out = [];
+  byTitle.forEach(function(r){
+    var isPlant = r.genus && r.genus !== "(no genus)";
+    var type = getItemType(r.genus, r.title);
+    var status;
+    if (r.amazon.units > 0 && r.shopify.units > 0) status = "both";
+    else if (r.amazon.units > 0) status = "amazon-only";
+    else status = "shopify-only";
+    out.push({title: r.title, sku: r.sku,
+              genus: isPlant ? r.genus : "—", type: type, isPlant: isPlant,
+              amazonRev: r.amazon.rev, amazonUnits: r.amazon.units,
+              shopifyRev: r.shopify.rev, shopifyUnits: r.shopify.units,
+              status: status});
+  });
+  return out;
+}
+
+function renderCrossPlantPanel() {
+  var rows = computeCrossPlantRows();
+  var tbody = document.getElementById("cross-plant-tbody");
+  var thead = document.getElementById("cross-plant-thead");
+  var count = document.getElementById("cross-plant-count");
+  if (!tbody) return;
+  if (!rows) {
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">Pick Amazon and/or Shopify snapshots to see plant-level comparison.</td></tr>';
+    thead.innerHTML = ""; count.textContent = ""; return;
+  }
+  var s = state.ovm;
+  var search = (document.getElementById("cross-plant-search").value || "").toLowerCase();
+  var filtered = rows;
+  if (s.crossPlantFilter === "amazon-only") filtered = filtered.filter(function(r){return r.status === "amazon-only";});
+  else if (s.crossPlantFilter === "shopify-only") filtered = filtered.filter(function(r){return r.status === "shopify-only";});
+  else if (s.crossPlantFilter === "both") filtered = filtered.filter(function(r){return r.status === "both";});
+  else if (s.crossPlantFilter === "nonplant") filtered = filtered.filter(function(r){return !r.isPlant;});
+  if (search) filtered = filtered.filter(function(r){return (r.title||"").toLowerCase().indexOf(search)>=0 || (r.sku||"").toLowerCase().indexOf(search)>=0;});
+  filtered.sort(function(a, b){return (b.amazonRev + b.shopifyRev) - (a.amazonRev + a.shopifyRev);});
+
+  var cols = [
+    {label: "Plant / Item", k: "title"},
+    {label: "SKU / ASIN", k: "sku"},
+    {label: "Genus", k: "genus"},
+    {label: "Type", k: "type"},
+    {label: "Amazon units", k: "amazonUnits", num: true, fmt: fmtN},
+    {label: "Amazon rev", k: "amazonRev", num: true, fmt: fmt$},
+    {label: "Shopify units", k: "shopifyUnits", num: true, fmt: fmtN},
+    {label: "Shopify rev", k: "shopifyRev", num: true, fmt: fmt$},
+    {label: "Preference", k: "status"}
+  ];
+  thead.innerHTML = cols.map(function(c){return '<th class="' + (c.num?"num":"") + '">' + c.label + '</th>';}).join("");
+  tbody.innerHTML = filtered.slice(0, 500).map(function(r){
+    var typeBadge = r.type ? '<span class="badge type-' + r.type.toLowerCase().replace(/[\s\/]/g,"") + '">' + r.type + '</span>' : "";
+    var prefBadge;
+    if (r.status === "amazon-only") prefBadge = '<span class="badge amazon">Amazon only</span>';
+    else if (r.status === "shopify-only") prefBadge = '<span class="badge shopify">Shopify only</span>';
+    else prefBadge = '<span class="badge balanced">Both</span>';
+    return "<tr>" + cols.map(function(c){
+      if (c.k === "type") return "<td>" + typeBadge + "</td>";
+      if (c.k === "status") return "<td>" + prefBadge + "</td>";
+      return '<td class="' + (c.num?"num":"") + '">' + (c.fmt ? c.fmt(r[c.k] || 0) : (r[c.k] || "")) + '</td>';
+    }).join("") + "</tr>";
+  }).join("");
+  count.textContent = filtered.length + " items";
+}
+
+function setupExtraSkuHandlers() {
+  var ovmSearch = document.getElementById("ovm-plant-search");
+  if (ovmSearch) ovmSearch.addEventListener("input", renderOvmPlantPanel);
+  var crossSearch = document.getElementById("cross-plant-search");
+  if (crossSearch) crossSearch.addEventListener("input", renderCrossPlantPanel);
+  var fBtns = document.querySelectorAll("#tab-ovm [data-ovm-plant-filter]");
+  for (var i = 0; i < fBtns.length; i++) {
+    (function(btn){
+      btn.addEventListener("click", function(){
+        state.ovm.plantFilter = btn.dataset.ovmPlantFilter;
+        var all = document.querySelectorAll("#tab-ovm [data-ovm-plant-filter]");
+        for (var j = 0; j < all.length; j++) all[j].classList.toggle("active", all[j] === btn);
+        renderOvmPlantPanel();
+      });
+    })(fBtns[i]);
+  }
+  var tBtns = document.querySelectorAll("#tab-ovm [data-ovm-plant-thresh]");
+  for (var i = 0; i < tBtns.length; i++) {
+    (function(btn){
+      btn.addEventListener("click", function(){
+        state.ovm.plantThreshold = +btn.dataset.ovmPlantThresh;
+        var all = document.querySelectorAll("#tab-ovm [data-ovm-plant-thresh]");
+        for (var j = 0; j < all.length; j++) all[j].classList.toggle("active", all[j] === btn);
+        renderOvmPlantPanel();
+      });
+    })(tBtns[i]);
+  }
+  var cBtns = document.querySelectorAll("#tab-cross [data-cross-plant-filter]");
+  for (var i = 0; i < cBtns.length; i++) {
+    (function(btn){
+      btn.addEventListener("click", function(){
+        state.ovm.crossPlantFilter = btn.dataset.crossPlantFilter;
+        var all = document.querySelectorAll("#tab-cross [data-cross-plant-filter]");
+        for (var j = 0; j < all.length; j++) all[j].classList.toggle("active", all[j] === btn);
+        renderCrossPlantPanel();
+      });
+    })(cBtns[i]);
+  }
 }

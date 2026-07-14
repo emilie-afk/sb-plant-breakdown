@@ -60,6 +60,11 @@
   .badge.type-succulent{background:#e8f5e9;color:#1b5e20}
   .badge.type-houseplant{background:#e3f2fd;color:#0d47a1}
   .badge.type-airplant{background:#e0f7fa;color:#006064}
+  .badge.type-soil, .badge.type-fertilizer{background:#efebe9;color:#4e342e}
+  .badge.type-potplanter, .badge.type-tool, .badge.type-accessories, .badge.type-kitequipment{background:#eceff1;color:#37474f}
+  .badge.type-subscription, .badge.type-giftcard, .badge.type-merchandise{background:#f3e5f5;color:#6a1b9a}
+  .badge.type-bundle, .badge.type-mysterybox, .badge.type-cutting{background:#fff3e0;color:#e65100}
+  .badge.type-other{background:#f5f5f5;color:#666}
   .badge.external{background:#fff3e0;color:#e65100}
   .badge.owned{background:#e8f5e9;color:var(--up)}
   .badge.sig-red{background:#ffebee;color:#c62828}
@@ -392,6 +397,25 @@
         &#9898; Dead &mdash; both weak &middot; ignore
       </div>
     </div>
+    <div class="panel">
+      <div class="panel-h">
+        <h2>Individual plant / SKU opportunities (from Market) <span class="pill" id="oppmap-plant-count"></span></h2>
+        <div class="actions">
+          <span class="small">Show:</span>
+          <button class="tab active" data-plant-filter="all">All</button>
+          <button class="tab" data-plant-filter="missing">Missing from yours</button>
+          <button class="tab" data-plant-filter="both">You sell too</button>
+          <span class="small" style="margin-left:6px">Min units:</span>
+          <button class="tab" data-plant-thresh="5">&ge; 5</button>
+          <button class="tab active" data-plant-thresh="10">&ge; 10</button>
+          <button class="tab" data-plant-thresh="25">&ge; 25</button>
+          <button class="tab" id="oppmap-plant-download">&#8595; Download CSV</button>
+        </div>
+      </div>
+      <div class="filterbar"><input id="oppmap-plant-search" placeholder="Search plant..."></div>
+      <div class="scroll"><table><thead><tr id="oppmap-plant-thead"></tr></thead><tbody id="oppmap-plant-tbody"></tbody></table></div>
+      <div class="small" style="margin-top:6px">Matching between market and your listings uses best-effort title normalization (lowercase, punctuation stripped). Some names may not match exactly across platforms.</div>
+    </div>
   </div>
 </div>
 
@@ -432,6 +456,25 @@
       <div class="scroll"><table><thead><tr id="ovm-thead"></tr></thead><tbody id="ovm-tbody"></tbody></table></div>
       <div class="small" style="margin-top:6px">Market revenue is estimated via unit-share of order totals. Click any row to see it in the Opportunity Map with signal + action.</div>
     </div>
+    <div class="panel">
+      <div class="panel-h">
+        <h2>Per-SKU / plant comparison <span class="pill" id="ovm-plant-count"></span></h2>
+        <div class="actions">
+          <span class="small">Show:</span>
+          <button class="tab active" data-ovm-plant-filter="all">All</button>
+          <button class="tab" data-ovm-plant-filter="missing">Missing from yours</button>
+          <button class="tab" data-ovm-plant-filter="both">You sell too</button>
+          <button class="tab" data-ovm-plant-filter="nonplant">Non-plant only</button>
+          <span class="small" style="margin-left:6px">Min units:</span>
+          <button class="tab" data-ovm-plant-thresh="5">&ge; 5</button>
+          <button class="tab active" data-ovm-plant-thresh="10">&ge; 10</button>
+          <button class="tab" data-ovm-plant-thresh="25">&ge; 25</button>
+        </div>
+      </div>
+      <div class="filterbar"><input id="ovm-plant-search" placeholder="Search plant / SKU..."></div>
+      <div class="scroll"><table><thead><tr id="ovm-plant-thead"></tr></thead><tbody id="ovm-plant-tbody"></tbody></table></div>
+      <div class="small" style="margin-top:6px">Includes non-plant items (Pot, Soil, Subscription, Bundle, etc.) classified by title. Best-effort title match against your Amazon + Shopify catalogs.</div>
+    </div>
   </div>
 </div>
 
@@ -450,7 +493,7 @@
     <div class="panel" id="cross-insights" style="display:none"></div>
     <div class="grid cards" id="cross-cards"></div>
     <div class="panel">
-      <div class="panel-h"><h2>Top 25 genera &mdash; channel split</h2></div>
+    <div class="panel">
       <div class="chart-box"><canvas id="cross-chart"></canvas></div>
     </div>
     <div class="panel" id="cross-drill" style="display:none">
@@ -464,6 +507,21 @@
       <div class="panel-h"><h2>Channel preference <span class="pill" id="cross-count"></span></h2></div>
       <div class="filterbar"><input id="cross-search" placeholder="Search genus..."></div>
       <div class="scroll"><table><thead><tr id="cross-thead"></tr></thead><tbody id="cross-tbody"></tbody></table></div>
+    </div>
+    <div class="panel">
+      <div class="panel-h">
+        <h2>Per-SKU / plant preference <span class="pill" id="cross-plant-count"></span></h2>
+        <div class="actions">
+          <span class="small">Show:</span>
+          <button class="tab active" data-cross-plant-filter="all">All</button>
+          <button class="tab" data-cross-plant-filter="amazon-only">Amazon only</button>
+          <button class="tab" data-cross-plant-filter="shopify-only">Shopify only</button>
+          <button class="tab" data-cross-plant-filter="both">Both channels</button>
+          <button class="tab" data-cross-plant-filter="nonplant">Non-plant only</button>
+        </div>
+      </div>
+      <div class="filterbar"><input id="cross-plant-search" placeholder="Search plant / SKU..."></div>
+      <div class="scroll"><table><thead><tr id="cross-plant-thead"></tr></thead><tbody id="cross-plant-tbody"></tbody></table></div>
     </div>
   </div>
 </div>
