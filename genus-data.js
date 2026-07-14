@@ -76,3 +76,39 @@ function getType(genus){
   if (!genus || genus === "(no genus)") return "";
   return GENUS_TYPE[genus] || "";
 }
+
+function detectNonPlantType(title){
+  if (!title) return "";
+  var t = String(title).toLowerCase();
+  if (/\bgift ?card\b/.test(t)) return "Gift Card";
+  if (/\b(subscription|subscribe|monthly plan|month plan)\b/.test(t)) return "Subscription";
+  if (/\b(fertilizer|plant food|nutrient|nutrients)\b/.test(t)) return "Fertilizer";
+  if (/\b(soil|coir|top dressing|pumice|perlite|lava rock|mulch|potting mix|substrate)\b/.test(t)) return "Soil";
+  if (/\b(cutting|cuttings)\b/.test(t)) return "Cutting";
+  if (/\b(mystery|surprise|random)\b/.test(t)) return "Mystery Box";
+  if (/\b(pot|planter|ceramic|concrete|container|vase|terrarium|dish garden)\b/.test(t)) return "Pot/Planter";
+  if (/\b(scissors|tweezer|shovel|tool|repotting mat|dust blower|grape wood)\b/.test(t)) return "Tool";
+  if (/\b(macrame|hanger|stand|shelf|saucer|coaster)\b/.test(t)) return "Accessories";
+  if (/\b(grow light|humidifier|heat pack|starter kit|kit)\b/.test(t)) return "Kit/Equipment";
+  if (/\b(pack|bundle|variety|collection|arrangement|assortment|assorted)\b/.test(t)) return "Bundle";
+  if (/\b(card|coloring|bookmark|calendar|printable|chart)\b/.test(t)) return "Merchandise";
+  return "Other";
+}
+
+function getItemType(genus, title){
+  var pt = getType(genus);
+  if (pt) return pt;
+  if (!genus || genus === "(no genus)") return detectNonPlantType(title);
+  return "";
+}
+rintable|chart)\b/.test(t)) return "Merchandise";
+  return "Other";
+}
+
+// Combined: returns plant type if a genus is set, otherwise classifies non-plant items by title.
+function getItemType(genus, title){
+  var pt = getType(genus);
+  if (pt) return pt;
+  if (!genus || genus === "(no genus)") return detectNonPlantType(title);
+  return "";
+}
