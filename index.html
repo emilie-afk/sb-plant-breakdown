@@ -57,6 +57,29 @@
   .badge.shopify{background:#e8f5e9;color:var(--up)}
   .badge.balanced{background:#f5f5f5;color:#666}
   .badge.airplant{background:#e0f7fa;color:#006064}
+  .badge.external{background:#fff3e0;color:#e65100}
+  .badge.owned{background:#e8f5e9;color:var(--up)}
+  .badge.sig-red{background:#ffebee;color:#c62828}
+  .badge.sig-orange{background:#fff3e0;color:#e65100}
+  .badge.sig-blue{background:#e3f2fd;color:#1565c0}
+  .badge.sig-yellow{background:#fffde7;color:#f57f17}
+  .badge.sig-green{background:#e8f5e9;color:var(--up)}
+  .badge.sig-gray{background:#f5f5f5;color:#666}
+  /* External Stores tier: warm/amber theming to distinguish from owned green */
+  .tier-external .panel{border-color:#ffe0b2;background:#fffaf3}
+  .tier-external .panel-h h2{color:#e65100}
+  .tier-external th{background:#fff3e0;color:#e65100}
+  .tier-external .card{border-color:#ffe0b2;background:#fffaf3}
+  .tier-external .card .label{color:#a35a00}
+  .tier-external .dropzone{border-color:#ffb74d}
+  .tier-external .dropzone .dz-msg{color:#e65100}
+  .tier-external .dropzone:hover, .tier-external .dropzone.drag{background:#fff3e0;border-color:#e65100}
+  .tier-header{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:2px 8px;border-radius:4px;margin-right:8px;vertical-align:middle}
+  .tier-header.owned{background:#e8f5e9;color:var(--accent)}
+  .tier-header.external{background:#fff3e0;color:#e65100}
+  .store-card{border-left:4px solid #ff9800}
+  .store-card.focus{border-left-color:#e65100;background:#fff8ef}
+  details.other-stores summary{cursor:pointer;padding:8px;font-weight:600;color:var(--muted)}
   table{width:100%;border-collapse:collapse;font-size:13px}
   th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--border)}
   th{background:#f0f5f0;color:var(--accent);font-weight:600;cursor:pointer;user-select:none;position:sticky;top:0;z-index:1}
@@ -81,11 +104,17 @@
 <h1>🌵 Succulents Box — Sales Breakdown Analyzer</h1>
 <div class="sub">Upload Amazon or Shopify exports. Everything is processed in your browser — nothing is uploaded to any server. Saved snapshots persist for next visit.</div>
 
-<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-  <div class="tabs">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:12px;flex-wrap:wrap">
+  <div class="tabs" style="align-items:center;flex-wrap:wrap">
+    <span class="tier-header owned">Owned</span>
     <button class="tab-btn active" data-tab="amazon">📦 Amazon</button>
     <button class="tab-btn" data-tab="shopify">🛒 Shopify</button>
+    <span style="width:1px;background:var(--border);align-self:stretch;margin:0 4px"></span>
+    <span class="tier-header external">Market</span>
+    <button class="tab-btn" data-tab="external">🏪 External Stores</button>
+    <span style="width:1px;background:var(--border);align-self:stretch;margin:0 4px"></span>
     <button class="tab-btn" data-tab="cross">⇆ Cross-channel</button>
+    <button class="tab-btn" data-tab="oppmap">🎯 Opportunity Map</button>
   </div>
   <button class="tab" id="manage-btn">⚙ Manage snapshots</button>
 </div>
@@ -227,34 +256,169 @@
   </div>
 </div>
 
-<!-- ============== CROSS-CHANNEL ============== -->
+<!-- ============== EXTERNAL STORES (Market) ============== -->
+<div class="tab-panel tier-external" id="tab-external">
+  <div class="picker">
+    <label>Snapshot</label><select id="external-snap-select"></select>
+    <label>vs Compare</label><select id="external-compare-select"></select>
+    <label style="margin-left:10px">
+      <input type="checkbox" id="external-group-parent" checked style="vertical-align:middle">
+      Group by parent brand (MCG family)
+    </label>
+    <div class="right">
+      <button class="tab" id="external-addfile-btn">+ Add file</button>
+      <button class="tab" id="external-download">&#8595; Clean data</button>
+      <button class="tab" id="external-download-breakdown">&#8595; Per-store breakdown</button>
+    </div>
+  </div>
+  <div class="dropzone" id="external-dropzone">
+    <div class="dz-msg">Drop a ShipStation Orders (line-item) CSV here</div>
+    <div class="dz-sub">Must be exported with "Export order line items" enabled. Requires columns: Store, Item Name, Item SKU, Quantity, Order Total, Order #.</div>
+    <input type="file" id="external-file-input" accept=".csv,.xlsx,.xls">
+  </div>
+  <div class="banner" id="external-mode-banner"></div>
+  <div id="external-empty" class="empty" style="display:block">
+    <div style="font-size:15px;margin-bottom:6px">Market intelligence &mdash; not your revenue</div>
+    <div>Drop a ShipStation Orders line-item CSV to see what external stores are selling.<br>
+    Their revenue is <strong>never</strong> summed with your Amazon or Shopify totals.</div>
+  </div>
+  <div id="external-content" style="display:none">
+    <div class="panel" id="external-insights" style="display:none"></div>
+    <div class="grid cards" id="external-summary-cards"></div>
+    <div class="panel">
+      <div class="panel-h">
+        <h2>Focus stores</h2>
+        <span class="small">Mountain Crest Gardens &middot; Leaf &amp; Clay</span>
+      </div>
+      <div class="grid" id="external-focus-cards" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))"></div>
+    </div>
+    <div class="panel" id="external-other-wrap" style="display:none">
+      <details class="other-stores" open>
+        <summary>Other external stores <span class="pill" id="external-other-count"></span></summary>
+        <div class="grid" id="external-other-cards" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));margin-top:10px"></div>
+      </details>
+    </div>
+    <div class="panel">
+      <div class="panel-h">
+        <h2>Top 25 genera by units (across all external stores)</h2>
+      </div>
+      <div class="chart-box"><canvas id="external-chart"></canvas></div>
+    </div>
+    <div class="panel">
+      <div class="panel-h">
+        <h2>Genus summary <span class="pill" id="external-genus-count"></span></h2>
+        <div class="actions">
+          <span class="small">Store:</span>
+          <select id="external-store-filter" style="padding:6px;border:1px solid var(--border);border-radius:6px;font-size:12px"></select>
+        </div>
+      </div>
+      <div class="filterbar"><input id="external-genus-search" placeholder="Search genus..."></div>
+      <div class="scroll"><table><thead><tr id="external-genus-thead"></tr></thead><tbody id="external-genus-tbody"></tbody></table></div>
+      <div class="small" style="margin-top:6px">Click any row to drill into the plants in that genus. Rev est. based on unit-share of order totals.</div>
+    </div>
+    <div class="panel" id="external-drill" style="display:none">
+      <div class="panel-h">
+        <h2 id="external-drill-title">Drill-down</h2>
+        <div class="actions"><button class="tab" id="external-close-drill">Close</button></div>
+      </div>
+      <div class="filterbar">
+        <input id="external-prod-search" placeholder="Search plant...">
+        <span class="pill" id="external-drill-count"></span>
+      </div>
+      <div class="scroll"><table><thead><tr id="external-prod-thead"></tr></thead><tbody id="external-prod-tbody"></tbody></table></div>
+    </div>
+    <div class="panel">
+      <div class="panel-h">
+        <h2>Top selling plants (by units) <span class="pill" id="external-tp-count"></span></h2>
+        <div class="actions">
+          <span class="small">Min units:</span>
+          <button class="tab" data-ext-thresh="5">&ge; 5</button>
+          <button class="tab active" data-ext-thresh="10">&ge; 10</button>
+          <button class="tab" data-ext-thresh="25">&ge; 25</button>
+          <button class="tab" data-ext-thresh="50">&ge; 50</button>
+          <button class="tab" id="external-tp-download">&#8595; Download CSV</button>
+        </div>
+      </div>
+      <div class="scroll" style="max-height:520px"><table><thead><tr id="external-tp-thead"></tr></thead><tbody id="external-tp-tbody"></tbody></table></div>
+    </div>
+  </div>
+</div>
+
+<div class="tab-panel" id="tab-oppmap">
+  <div class="picker">
+    <label>Owned (Amazon)</label><select id="oppmap-amazon-select"></select>
+    <label>Owned (Shopify)</label><select id="oppmap-shopify-select"></select>
+    <label>Market (External)</label><select id="oppmap-external-select"></select>
+    <div class="right"><button class="tab" id="oppmap-download">&#8595; Download map</button></div>
+  </div>
+  <div class="banner" id="oppmap-banner"></div>
+  <div id="oppmap-empty" class="empty" style="display:block">
+    Pick at least one Owned snapshot (Amazon or Shopify) plus an External Stores snapshot to see opportunity signals.
+  </div>
+  <div id="oppmap-content" style="display:none">
+    <div class="panel">
+      <div class="panel-h"><h2>Signal summary</h2></div>
+      <div class="grid cards" id="oppmap-signal-cards"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-h">
+        <h2>Genus opportunity map <span class="pill" id="oppmap-count"></span></h2>
+        <div class="actions">
+          <span class="small">Show:</span>
+          <button class="tab active" data-sig="all">All</button>
+          <button class="tab" data-sig="red">Missing</button>
+          <button class="tab" data-sig="orange">Losing</button>
+          <button class="tab" data-sig="blue">Soft market</button>
+          <button class="tab" data-sig="green">Dominate</button>
+        </div>
+      </div>
+      <div class="filterbar"><input id="oppmap-search" placeholder="Search genus..."></div>
+      <div class="scroll"><table><thead><tr id="oppmap-thead"></tr></thead><tbody id="oppmap-tbody"></tbody></table></div>
+      <div class="small" style="margin-top:6px">
+        <strong>Signals:</strong>
+        &#128308; Missing &mdash; market sells well, you sell $0 &middot; list it &nbsp;
+        &#128992; Losing &mdash; both sell, market > 2x you &middot; investigate &nbsp;
+        &#128309; Soft market &mdash; market sells it weakly &middot; chance to become leader &nbsp;
+        &#128994; Dominate &mdash; you sell it well, market barely &middot; confirm moat &nbsp;
+        &#9898; Dead &mdash; both weak &middot; ignore
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="tab-panel" id="tab-cross">
   <div class="picker">
     <label>Amazon</label><select id="cross-amazon-select"></select>
     <label>Shopify</label><select id="cross-shopify-select"></select>
-    <div class="right"><button class="tab" id="cross-download">⬇ Download cross-channel</button></div>
+    <div class="right"><button class="tab" id="cross-download">&#8595; Download cross-channel</button></div>
   </div>
   <div class="banner" id="cross-banner"></div>
   <div id="cross-empty" class="empty" style="display:block">Upload at least one Amazon and one Shopify snapshot to see the cross-channel comparison.</div>
   <div id="cross-content" style="display:none">
-    <div class="panel" id="cross-overlap-box" style="background:#fff8e1;border-color:#ffe082;font-size:13px;display:none"></div>
+    <div class="panel" id="cross-overlap-box" style="background:#fff8e1;border-color:#ffe082;font-size:13px;display:none">
+      <label><input type="checkbox" id="cross-overlap-chk"> Amazon revenue is included in Shopify totals (post-April 2026)</label>
+    </div>
     <div class="panel" id="cross-insights" style="display:none"></div>
     <div class="grid cards" id="cross-cards"></div>
     <div class="panel">
-      <div class="panel-h"><h2>Top 25 genera — channel split</h2></div>
+      <div class="panel-h"><h2>Top 25 genera &mdash; channel split</h2></div>
       <div class="chart-box"><canvas id="cross-chart"></canvas></div>
     </div>
-    <div class="panel" id="cross-drill" style="display:none"></div>
+    <div class="panel" id="cross-drill" style="display:none">
+      <div class="panel-h">
+        <h2 id="cross-drill-title">Drill-down</h2>
+        <div class="actions"><button class="tab" id="cross-drill-close">Close</button></div>
+      </div>
+    </div>
     <div class="panel" id="cross-opportunities" style="display:none"></div>
     <div class="panel">
       <div class="panel-h"><h2>Channel preference <span class="pill" id="cross-count"></span></h2></div>
-      <div class="filterbar"><input id="cross-search" placeholder="Search genus…"></div>
+      <div class="filterbar"><input id="cross-search" placeholder="Search genus..."></div>
       <div class="scroll"><table><thead><tr id="cross-thead"></tr></thead><tbody id="cross-tbody"></tbody></table></div>
     </div>
   </div>
 </div>
 
-<!-- ============== MANAGE MODAL ============== -->
 <div class="modal" id="manage-modal">
   <div class="modal-box">
     <h2>Saved snapshots</h2>
@@ -264,7 +428,6 @@
   </div>
 </div>
 
-<!-- Libraries: SheetJS for xlsx parsing, Chart.js for charts -->
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.js"></script>
 <script src="genus-data.js"></script>

@@ -184,7 +184,11 @@ async function handleFile(source, file){
     const wb = await readFile(file);
     const ws = wb.Sheets[wb.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json(ws, {header: 1, raw: true, defval: ""});
-    const products = source === "amazon" ? parseAmazon(rows, ws) : parseShopify(rows);
+    let products;
+    if (source === "amazon") products = parseAmazon(rows, ws);
+    else if (source === "shopify") products = parseShopify(rows);
+    else if (source === "external") products = parseShipStation(rows);
+    else throw new Error("Unknown source: " + source);
     if (!products.length) { alert("No data rows found in file."); return; }
     let [start, end] = parseDates(file.name);
     if (!start) {
@@ -297,12 +301,15 @@ async function editSnapshotPeriod(id){
   snapshots.push(newSnap);
   saveSnapshots();
   // Update any active state pointers
-  for (const src of ['amazon','shopify']) {
-    if (state[src].snapshotId === id) state[src].snapshotId = newSnap.id;
-    if (state[src].compareId === id) state[src].compareId = newSnap.id;
+  for (const src of ['amazon','shopify','external']) {
+    if (state[src] && state[src].snapshotId === id) state[src].snapshotId = newSnap.id;
+    if (state[src] && state[src].compareId === id) state[src].compareId = newSnap.id;
   }
   if (state.cross.amazonId === id) state.cross.amazonId = newSnap.id;
   if (state.cross.shopifyId === id) state.cross.shopifyId = newSnap.id;
+  if (state.oppmap && state.oppmap.amazonId === id) state.oppmap.amazonId = newSnap.id;
+  if (state.oppmap && state.oppmap.shopifyId === id) state.oppmap.shopifyId = newSnap.id;
+  if (state.oppmap && state.oppmap.externalId === id) state.oppmap.externalId = newSnap.id;
   openManage();
   renderTab(activeTab);
 }
@@ -380,6 +387,8 @@ const deltaClass = v => v > 0 ? 'up' : v < 0 ? 'down' : 'flat';
 // ============================================================
 function renderTab(source){
   if (source === "cross") return renderCross();
+  if (source === "external") return renderExternal();
+  if (source === "oppmap") return renderOppMap();
   const tabState = state[source];
   const snaps = snapshotsFor(source);
   // Render the snapshot picker
@@ -1536,12 +1545,15 @@ function openManage(){
         if (confirm('Delete this snapshot? This cannot be undone.')) {
           deleteSnapshot(btn.dataset.del);
           // Reset any active snapshot pointers that referenced it
-          for (const src of ['amazon','shopify']) {
-            if (state[src].snapshotId === btn.dataset.del) state[src].snapshotId = null;
-            if (state[src].compareId === btn.dataset.del) state[src].compareId = null;
+          for (const src of ['amazon','shopify','external']) {
+            if (state[src] && state[src].snapshotId === btn.dataset.del) state[src].snapshotId = null;
+            if (state[src] && state[src].compareId === btn.dataset.del) state[src].compareId = null;
           }
           if (state.cross.amazonId === btn.dataset.del) state.cross.amazonId = null;
           if (state.cross.shopifyId === btn.dataset.del) state.cross.shopifyId = null;
+          if (state.oppmap && state.oppmap.amazonId === btn.dataset.del) state.oppmap.amazonId = null;
+          if (state.oppmap && state.oppmap.shopifyId === btn.dataset.del) state.oppmap.shopifyId = null;
+          if (state.oppmap && state.oppmap.externalId === btn.dataset.del) state.oppmap.externalId = null;
           openManage(); renderTab(activeTab);
         }
       }));
@@ -1574,7 +1586,8 @@ function setupDropzone(source){
 document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.tab-btn').forEach(b =>
     b.addEventListener('click', () => switchTab(b.dataset.tab)));
-  setupDropzone('amazon'); setupDropzone('shopify');
+  setupDropzone('amazon'); setupDropzone('shopify'); setupDropzone('external');
+  setupExternalHandlers(); setupOppMapHandlers();
   for (const src of ['amazon','shopify']) {
     document.getElementById(`${src}-snap-select`).addEventListener('change', e => {
       state[src].snapshotId = e.target.value || null;
@@ -1628,10 +1641,703 @@ document.addEventListener('DOMContentLoaded', () => {
   if (snapshots.length){
     const amazonLatest = snapshotsFor('amazon')[0];
     const shopifyLatest = snapshotsFor('shopify')[0];
+    const externalLatest = snapshotsFor('external')[0];
     if (amazonLatest) state.amazon.snapshotId = amazonLatest.id;
     if (shopifyLatest) state.shopify.snapshotId = shopifyLatest.id;
+    if (externalLatest) state.external.snapshotId = externalLatest.id;
     if (amazonLatest) state.cross.amazonId = amazonLatest.id;
     if (shopifyLatest) state.cross.shopifyId = shopifyLatest.id;
+    if (amazonLatest) state.oppmap.amazonId = amazonLatest.id;
+    if (shopifyLatest) state.oppmap.shopifyId = shopifyLatest.id;
+    if (externalLatest) state.oppmap.externalId = externalLatest.id;
   }
   switchTab('amazon');
 });
+
+// ============================================================
+// EXTERNAL STORES (ShipStation line-item exports)
+// ============================================================
+
+// Focus stores — shown prominently on External Stores tab
+const EXTERNAL_FOCUS_STORES = ['Mountain Crest Gardens', 'Leaf & Clay'];
+
+// Extend state
+state.external = { snapshotId: null, mode: 'single', compareId: null,
+                   groupByParent: true, drillGenus: null, storeFilter: 'all',
+                   topThreshold: 10, chart: null };
+state.oppmap   = { amazonId: null, shopifyId: null, externalId: null,
+                   sigFilter: 'all', softThreshold: 25 };
+state.topPlants.external = { threshold: 10, sortCol: null, sortDir: 'desc' };
+state.genusSort.external = { col: 1, dir: 'desc' };  // 1 = units desc
+
+// Normalize raw ShipStation store name into a parent brand grouping
+function normalizeExternalStore(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return 'Unknown';
+  const low = s.toLowerCase();
+  if (low.includes('mountain crest') || /\bmcg\b/i.test(low)) return 'Mountain Crest Gardens';
+  if (low.includes('leaf & clay') || low.includes('leaf and clay')) return 'Leaf & Clay';
+  return s;
+}
+
+// Parse a ShipStation Orders (line-item) export
+function parseShipStation(rows) {
+  if (!rows || !rows.length) return [];
+  const header = rows[0].map(x => String(x || '').trim());
+  const idx = {}; header.forEach((h, i) => { idx[h.toLowerCase()] = i; });
+  const col = names => {
+    for (const n of names) if (n.toLowerCase() in idx) return idx[n.toLowerCase()];
+    return -1;
+  };
+  const iOrder = col(['Order #', 'Order Number', 'OrderNumber']);
+  const iDate  = col(['Order Date', 'OrderDate']);
+  const iSKU   = col(['Item SKU', 'SKU', 'Product SKU']);
+  const iName  = col(['Item Name', 'Product Name', 'Description', 'Item']);
+  const iQty   = col(['Quantity', 'Item Quantity', 'Qty']);
+  const iTotal = col(['Order Total', 'Amount Paid', 'OrderTotal']);
+  const iStore = col(['Store', 'Store Name', 'Marketplace', 'Source']);
+  if (iStore < 0 || iName < 0 || iOrder < 0) {
+    throw new Error('Not a ShipStation Orders export. Need columns: Store, Item Name, Order #. Re-export with "Export order line items" enabled.');
+  }
+  const num = x => {
+    if (typeof x === 'number') return x;
+    if (!x) return 0;
+    const n = parseFloat(String(x).replace(/[,$\s%]/g, ''));
+    return isNaN(n) ? 0 : n;
+  };
+  // Pass 1: gather lines + per-order totals
+  const raw = [], unitsPerOrder = {}, totalPerOrder = {};
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i]; if (!r) continue;
+    const orderId = String(r[iOrder] || '').trim();
+    if (!orderId) continue;
+    const title = String(r[iName] || '').trim();
+    if (!title || title === 'Item Name') continue;
+    const rawStore = String(r[iStore] || '').trim();
+    if (!rawStore) continue;
+    const qty = Math.max(num(r[iQty]) || 1, 1);
+    const orderTotal = iTotal >= 0 ? num(r[iTotal]) : 0;
+    const sku = String(r[iSKU] || '').trim();
+    const orderDate = iDate >= 0 ? String(r[iDate] || '').trim() : '';
+    raw.push({orderId, orderDate, rawStore, store: normalizeExternalStore(rawStore),
+              sku, title, qty, orderTotal});
+    unitsPerOrder[orderId] = (unitsPerOrder[orderId] || 0) + qty;
+    if (!(orderId in totalPerOrder)) totalPerOrder[orderId] = orderTotal;
+  }
+  // Pass 2: attribute per-line estimated revenue via unit-share
+  return raw.map(line => {
+    const tu = unitsPerOrder[line.orderId] || 1;
+    const tot = totalPerOrder[line.orderId] || 0;
+    const estRev = tu > 0 ? tot * (line.qty / tu) : 0;
+    return {...line, units: line.qty, estRev,
+            genus: detectGenus(line.title) || '(no genus)'};
+  });
+}
+
+// Aggregate ShipStation products by store (deduping orders for accurate rev)
+function aggregateExternalByStore(products, groupByParent) {
+  const map = {}, seen = {};
+  for (const p of products) {
+    const key = groupByParent ? p.store : p.rawStore;
+    if (!(key in map)) {
+      map[key] = {store: key, units: 0, rev: 0, orders: 0, products: []};
+      seen[key] = new Set();
+    }
+    map[key].units += p.units;
+    map[key].products.push(p);
+    if (!seen[key].has(p.orderId)) {
+      map[key].rev += (p.orderTotal || 0);
+      map[key].orders += 1;
+      seen[key].add(p.orderId);
+    }
+  }
+  return Object.values(map)
+    .map(s => ({...s, aov: s.orders ? s.rev/s.orders : 0}))
+    .sort((a, b) => b.rev - a.rev);
+}
+
+// Aggregate ShipStation products by genus (units accurate, revenue estimated)
+function aggregateExternalByGenus(products) {
+  const map = {};
+  for (const p of products) {
+    const g = p.genus || '(no genus)';
+    if (!(g in map)) map[g] = {genus: g, units: 0, estRev: 0, orderSet: new Set(), skuSet: new Set(), items: []};
+    map[g].units += p.units;
+    map[g].estRev += p.estRev;
+    map[g].orderSet.add(p.orderId);
+    if (p.sku) map[g].skuSet.add(p.sku);
+    map[g].items.push(p);
+  }
+  return Object.values(map).map(g => ({
+    genus: g.genus, units: g.units, estRev: g.estRev,
+    orders: g.orderSet.size, skus: g.skuSet.size, items: g.items
+  })).sort((a, b) => b.units - a.units);
+}
+
+// Aggregate ShipStation products by plant title (dedup across orders/stores)
+function aggregateExternalByPlant(products) {
+  const map = {};
+  for (const p of products) {
+    const t = p.title;
+    if (!(t in map)) map[t] = {title: t, sku: p.sku, genus: p.genus,
+                               units: 0, estRev: 0, orderSet: new Set(), storeSet: new Set()};
+    map[t].units += p.units;
+    map[t].estRev += p.estRev;
+    map[t].orderSet.add(p.orderId);
+    map[t].storeSet.add(p.store);
+    if (!map[t].sku && p.sku) map[t].sku = p.sku;
+  }
+  return Object.values(map).map(p => ({
+    title: p.title, sku: p.sku, genus: p.genus,
+    units: p.units, estRev: p.estRev,
+    orders: p.orderSet.size, storeCount: p.storeSet.size
+  })).sort((a, b) => b.units - a.units);
+}
+
+
+// ============================================================
+// EXTERNAL STORES — RENDER
+// ============================================================
+function renderExternal() {
+  const s = state.external;
+  const snaps = snapshotsFor('external');
+  renderSnapshotPicker('external', snaps);
+  if (!s.snapshotId) {
+    document.getElementById('external-content').style.display = 'none';
+    document.getElementById('external-empty').style.display = 'block';
+    return;
+  }
+  document.getElementById('external-content').style.display = 'block';
+  document.getElementById('external-empty').style.display = 'none';
+  const snap = snapshots.find(x => x.id === s.snapshotId);
+  if (!snap) { s.snapshotId = null; renderExternal(); return; }
+
+  const products = snap.products;
+  document.getElementById('external-mode-banner').innerHTML =
+    `<strong>${snap.label}</strong> · ${products.length.toLocaleString()} line items · uploaded ${new Date(snap.uploadedAt).toLocaleDateString()}
+     &nbsp; <span class="small">Market signal — never summed with your Amazon/Shopify totals.</span>`;
+
+  // Store aggregation
+  const byStore = aggregateExternalByStore(products, s.groupByParent);
+  renderExternalSummaryCards(byStore, products);
+  renderExternalFocusCards(byStore);
+  renderExternalOtherStores(byStore);
+  renderExternalStoreFilter(byStore);
+
+  // Filter products by chosen store
+  let filteredProducts = products;
+  if (s.storeFilter && s.storeFilter !== 'all') {
+    filteredProducts = products.filter(p =>
+      s.groupByParent ? p.store === s.storeFilter : p.rawStore === s.storeFilter);
+  }
+  const genera = aggregateExternalByGenus(filteredProducts);
+  renderExternalChart(genera);
+  renderExternalGenusTable(genera);
+  renderExternalTopPlants(filteredProducts);
+  renderExternalInsights(snap, byStore, genera);
+  if (s.drillGenus) renderExternalDrill(s.drillGenus, genera);
+}
+
+function renderExternalSummaryCards(byStore, products) {
+  const totalRev = byStore.reduce((a, s) => a + s.rev, 0);
+  const totalUnits = byStore.reduce((a, s) => a + s.units, 0);
+  const totalOrders = byStore.reduce((a, s) => a + s.orders, 0);
+  const genera = new Set(products.map(p => p.genus).filter(g => g && g !== '(no genus)')).size;
+  const cards = [
+    {label: 'Market revenue (est.)', value: fmt$(totalRev), sub: '<span class="small">not your revenue</span>'},
+    {label: 'Units observed', value: fmtN(totalUnits)},
+    {label: 'Orders observed', value: fmtN(totalOrders)},
+    {label: 'External stores', value: fmtN(byStore.length)},
+    {label: 'Plant genera', value: fmtN(genera)}
+  ];
+  document.getElementById('external-summary-cards').innerHTML = cards.map(c =>
+    `<div class="card"><div class="label">${c.label}</div><div class="value">${c.value}</div>${c.sub ? `<div class="sub">${c.sub}</div>` : ''}</div>`).join('');
+}
+
+function renderExternalFocusCards(byStore) {
+  const focus = byStore.filter(s => EXTERNAL_FOCUS_STORES.some(f => s.store.includes(f) || f.includes(s.store)));
+  const container = document.getElementById('external-focus-cards');
+  if (!focus.length) {
+    container.innerHTML = '<div class="small">No focus stores found in this file. All external stores shown below.</div>';
+    return;
+  }
+  container.innerHTML = focus.map(s => renderStoreCard(s, true)).join('');
+}
+
+function renderExternalOtherStores(byStore) {
+  const other = byStore.filter(s => !EXTERNAL_FOCUS_STORES.some(f => s.store.includes(f) || f.includes(s.store)));
+  const wrap = document.getElementById('external-other-wrap');
+  if (!other.length) { wrap.style.display = 'none'; return; }
+  wrap.style.display = 'block';
+  document.getElementById('external-other-count').textContent = other.length;
+  document.getElementById('external-other-cards').innerHTML = other.map(s => renderStoreCard(s, false)).join('');
+}
+
+function renderStoreCard(s, isFocus) {
+  const genera = aggregateExternalByGenus(s.products);
+  const topGenera = genera.filter(g => g.genus !== '(no genus)').slice(0, 3);
+  const topGeneraTxt = topGenera.map(g => `${g.genus} (${g.units})`).join(', ') || '—';
+  return `<div class="card store-card ${isFocus ? 'focus' : ''}">
+    <div style="font-weight:600;font-size:14px;color:#e65100;margin-bottom:6px">${s.store}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px">
+      <div><div class="small">Revenue</div><div style="font-weight:600">${fmt$(s.rev)}</div></div>
+      <div><div class="small">Orders</div><div style="font-weight:600">${fmtN(s.orders)}</div></div>
+      <div><div class="small">Units</div><div style="font-weight:600">${fmtN(s.units)}</div></div>
+      <div><div class="small">AOV</div><div style="font-weight:600">${fmt$(s.aov)}</div></div>
+    </div>
+    <div class="small" style="margin-top:8px"><strong>Top:</strong> ${topGeneraTxt}</div>
+  </div>`;
+}
+
+function renderExternalStoreFilter(byStore) {
+  const sel = document.getElementById('external-store-filter');
+  const cur = state.external.storeFilter;
+  sel.innerHTML = '<option value="all">All stores</option>' +
+    byStore.map(s => `<option value="${s.store}" ${s.store === cur ? 'selected' : ''}>${s.store} (${fmt$(s.rev)})</option>`).join('');
+}
+
+function renderExternalChart(genera) {
+  const items = genera.filter(g => showNonPlant || g.genus !== '(no genus)').slice(0, 25);
+  const ctx = document.getElementById('external-chart').getContext('2d');
+  if (state.external.chart) state.external.chart.destroy();
+  state.external.chart = new Chart(ctx, {
+    type: 'bar',
+    data: {labels: items.map(g => g.genus), datasets: [{
+      data: items.map(g => g.units), backgroundColor: '#ff9800', label: 'Units'
+    }]},
+    options: {indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      plugins: {legend: {display: false}, tooltip: {callbacks: {
+        label: c => `${fmtN(c.parsed.x)} units (est. ${fmt$(items[c.dataIndex].estRev)})`
+      }}},
+      scales: {x: {ticks: {callback: v => fmtN(v)}}}}
+  });
+}
+
+function renderExternalGenusTable(genera) {
+  const search = (document.getElementById('external-genus-search').value || '').toLowerCase();
+  const items = genera.filter(g =>
+    (showNonPlant || g.genus !== '(no genus)') &&
+    (!search || g.genus.toLowerCase().includes(search)));
+  const cols = [
+    {key: 'genus', label: 'Genus'},
+    {key: 'units', label: 'Units', num: true, fmt: fmtN},
+    {key: 'estRev', label: 'Est. revenue', num: true, fmt: fmt$},
+    {key: 'orders', label: 'Orders', num: true, fmt: fmtN},
+    {key: 'skus', label: 'SKUs', num: true, fmt: fmtN}
+  ];
+  const ss = state.genusSort.external;
+  const sorted = [...items].sort((a, b) => {
+    const kv = cols[ss.col].key, dir = ss.dir === 'asc' ? 1 : -1;
+    return (a[kv] > b[kv] ? 1 : a[kv] < b[kv] ? -1 : 0) * dir;
+  });
+  document.getElementById('external-genus-thead').innerHTML = cols.map((c, i) =>
+    `<th class="${c.num ? 'num' : ''}" data-genus-sort="${i}">${c.label}${i === ss.col ? (ss.dir === 'asc' ? ' ▲' : ' ▼') : ''}</th>`).join('');
+  document.getElementById('external-genus-tbody').innerHTML = sorted.map(g =>
+    `<tr class="clickable" data-drill-genus="${g.genus}">${cols.map(c =>
+      `<td class="${c.num ? 'num' : ''}">${c.fmt ? c.fmt(g[c.key]) : g[c.key]}</td>`).join('')}</tr>`).join('');
+  document.getElementById('external-genus-count').textContent = sorted.length + ' genera';
+  document.getElementById('external-genus-thead').querySelectorAll('[data-genus-sort]').forEach(th =>
+    th.addEventListener('click', () => {
+      const idx = +th.dataset.genusSort;
+      if (ss.col === idx) ss.dir = ss.dir === 'asc' ? 'desc' : 'asc';
+      else { ss.col = idx; ss.dir = 'desc'; }
+      renderExternal();
+    }));
+  document.getElementById('external-genus-tbody').querySelectorAll('[data-drill-genus]').forEach(tr =>
+    tr.addEventListener('click', () => {
+      state.external.drillGenus = tr.dataset.drillGenus;
+      renderExternal();
+    }));
+}
+
+function renderExternalTopPlants(products) {
+  const thresh = state.external.topThreshold;
+  const plants = aggregateExternalByPlant(products).filter(p => p.units >= thresh && (showNonPlant || p.genus !== '(no genus)'));
+  const cols = [
+    {key: 'title', label: 'Plant / item', num: false},
+    {key: 'genus', label: 'Genus', num: false},
+    {key: 'sku', label: 'SKU', num: false},
+    {key: 'units', label: 'Units', num: true, fmt: fmtN},
+    {key: 'estRev', label: 'Est. rev', num: true, fmt: fmt$},
+    {key: 'orders', label: 'Orders', num: true, fmt: fmtN},
+    {key: 'storeCount', label: 'Stores', num: true, fmt: fmtN}
+  ];
+  const tp = state.topPlants.external;
+  if (tp.sortCol == null) { tp.sortCol = 3; tp.sortDir = 'desc'; }
+  plants.sort((a, b) => {
+    const kv = cols[tp.sortCol].key, dir = tp.sortDir === 'asc' ? 1 : -1;
+    return (a[kv] > b[kv] ? 1 : a[kv] < b[kv] ? -1 : 0) * dir;
+  });
+  document.getElementById('external-tp-thead').innerHTML = cols.map((c, i) =>
+    `<th class="${c.num ? 'num' : ''}" data-tp-sort="${i}">${c.label}${i === tp.sortCol ? (tp.sortDir === 'asc' ? ' ▲' : ' ▼') : ''}</th>`).join('');
+  document.getElementById('external-tp-tbody').innerHTML = plants.slice(0, 500).map(p =>
+    `<tr>${cols.map(c => `<td class="${c.num ? 'num' : ''}">${c.fmt ? c.fmt(p[c.key]) : (p[c.key] || '')}</td>`).join('')}</tr>`).join('');
+  document.getElementById('external-tp-count').textContent = plants.length + ' plants';
+  document.getElementById('external-tp-thead').querySelectorAll('[data-tp-sort]').forEach(th =>
+    th.addEventListener('click', () => {
+      const idx = +th.dataset.tpSort;
+      if (tp.sortCol === idx) tp.sortDir = tp.sortDir === 'asc' ? 'desc' : 'asc';
+      else { tp.sortCol = idx; tp.sortDir = 'desc'; }
+      renderExternal();
+    }));
+}
+
+function renderExternalDrill(genus, genera) {
+  const g = genera.find(x => x.genus === genus);
+  const panel = document.getElementById('external-drill');
+  if (!g) { panel.style.display = 'none'; return; }
+  panel.style.display = 'block';
+  document.getElementById('external-drill-title').innerHTML = `${genus} <span class="pill">${g.items.length} lines · ${fmtN(g.units)} units</span>`;
+  const search = (document.getElementById('external-prod-search').value || '').toLowerCase();
+  // Aggregate items in this genus by title
+  const byTitle = aggregateExternalByPlant(g.items).filter(p => !search || p.title.toLowerCase().includes(search));
+  const cols = [
+    {key: 'title', label: 'Plant'}, {key: 'sku', label: 'SKU'},
+    {key: 'units', label: 'Units', num: true, fmt: fmtN},
+    {key: 'estRev', label: 'Est. rev', num: true, fmt: fmt$},
+    {key: 'orders', label: 'Orders', num: true, fmt: fmtN},
+    {key: 'storeCount', label: 'Stores', num: true, fmt: fmtN}
+  ];
+  document.getElementById('external-prod-thead').innerHTML = cols.map(c =>
+    `<th class="${c.num ? 'num' : ''}">${c.label}</th>`).join('');
+  document.getElementById('external-prod-tbody').innerHTML = byTitle.map(p =>
+    `<tr>${cols.map(c => `<td class="${c.num ? 'num' : ''}">${c.fmt ? c.fmt(p[c.key]) : (p[c.key] || '')}</td>`).join('')}</tr>`).join('');
+  document.getElementById('external-drill-count').textContent = byTitle.length + ' plants';
+}
+
+function renderExternalInsights(snap, byStore, genera) {
+  const el = document.getElementById('external-insights');
+  const cards = [];
+  // Insight: top gainer store
+  if (byStore.length) {
+    const top = byStore[0];
+    cards.push({icon: '🏪', title: 'Biggest external footprint',
+      body: `<strong>${top.store}</strong> — ${fmt$(top.rev)} across ${fmtN(top.orders)} orders (${fmtN(top.units)} units). AOV ${fmt$(top.aov)}.`});
+  }
+  // Insight: top genus overall
+  const topGenera = genera.filter(g => g.genus !== '(no genus)').slice(0, 3);
+  if (topGenera.length) {
+    cards.push({icon: '🌱', title: 'What the market is moving',
+      body: `Top genera by units: ${topGenera.map(g => `<strong>${g.genus}</strong> (${fmtN(g.units)})`).join(', ')}. Strong external demand signal.`});
+  }
+  // Bundle blind-spot warning
+  const noGenus = genera.find(g => g.genus === '(no genus)');
+  if (noGenus) {
+    const pct = ((noGenus.units / genera.reduce((a, g) => a + g.units, 0)) * 100).toFixed(0);
+    cards.push({icon: '⚠️', title: 'Non-plant lines detected',
+      body: `${fmtN(noGenus.units)} units (~${pct}%) are bundles / mystery boxes / supplies / cuttings — genus can't be determined from title. Consider these separately.`});
+  }
+  if (!cards.length) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.innerHTML = `<div class="panel-h"><h2>💡 Market insights <span class="pill">${cards.length}</span></h2></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px">
+      ${cards.map(c => `<div style="border:1px solid #ffe0b2;border-radius:10px;padding:12px 14px;background:#fffaf3">
+        <div style="font-weight:600;color:#e65100;margin-bottom:4px">${c.icon} ${c.title}</div>
+        <div style="font-size:13px;line-height:1.5">${c.body}</div></div>`).join('')}
+    </div>`;
+}
+
+function closeExternalDrill() {
+  state.external.drillGenus = null;
+  document.getElementById('external-drill').style.display = 'none';
+}
+
+// ============================================================
+// OPPORTUNITY MAP
+// ============================================================
+function computeOpportunityMap() {
+  const am = state.oppmap.amazonId ? snapshots.find(s => s.id === state.oppmap.amazonId) : null;
+  const sh = state.oppmap.shopifyId ? snapshots.find(s => s.id === state.oppmap.shopifyId) : null;
+  const ex = state.oppmap.externalId ? snapshots.find(s => s.id === state.oppmap.externalId) : null;
+  if ((!am && !sh) || !ex) return null;
+
+  // Owned genera: combine Amazon + Shopify by genus
+  const ownedMap = {};
+  const addOwned = (products, channel) => {
+    for (const p of products) {
+      const g = p.genus || '(no genus)';
+      if (!(g in ownedMap)) ownedMap[g] = {genus: g, amazon: 0, shopify: 0, units: 0};
+      ownedMap[g][channel] += p.rev;
+      ownedMap[g].units += p.units;
+    }
+  };
+  if (am) addOwned(am.products, 'amazon');
+  if (sh) addOwned(sh.products, 'shopify');
+
+  // External genera (units + est. rev, aggregated across all stores in that snapshot)
+  const extAgg = aggregateExternalByGenus(ex.products);
+  const extMap = Object.fromEntries(extAgg.map(g => [g.genus, g]));
+
+  // Compute soft market threshold: 25th percentile of external genera revenue
+  const extRevs = extAgg.filter(g => g.genus !== '(no genus)').map(g => g.estRev).sort((a, b) => a - b);
+  const softCutoff = extRevs.length ? extRevs[Math.floor(extRevs.length * (state.oppmap.softThreshold / 100))] : 0;
+
+  // Combine all genera universe
+  const allGenera = new Set([...Object.keys(ownedMap), ...Object.keys(extMap)]);
+  const rows = [];
+  for (const g of allGenera) {
+    if (g === '(no genus)') continue;
+    const owned = ownedMap[g] || {amazon: 0, shopify: 0, units: 0};
+    const ext = extMap[g] || {units: 0, estRev: 0};
+    const yourRev = owned.amazon + owned.shopify;
+    const mktRev = ext.estRev;
+    const mktUnits = ext.units;
+    // Signal assignment
+    let signal, action;
+    if (mktRev >= softCutoff && yourRev === 0) {
+      signal = 'red'; action = 'List it — market sells this, you sell $0.';
+    } else if (mktRev > 0 && yourRev > 0 && mktRev >= yourRev * 2) {
+      signal = 'orange'; action = 'Investigate — market outsells you 2×+.';
+    } else if (mktRev > 0 && mktRev < softCutoff && yourRev < mktRev * 1.5) {
+      signal = 'blue'; action = 'Soft market — chance to become the leader.';
+    } else if (yourRev > 0 && yourRev >= mktRev * 2) {
+      signal = 'green'; action = 'You dominate — confirm the moat.';
+    } else if (mktRev === 0 && yourRev === 0) {
+      signal = 'gray'; action = 'Neither sells this — ignore.';
+    } else {
+      signal = 'yellow'; action = 'Both selling, watch for trend.';
+    }
+    rows.push({
+      genus: g, amazon: owned.amazon, shopify: owned.shopify, yourRev,
+      mktUnits, mktRev, signal, action,
+      diffPct: yourRev > 0 ? (mktRev - yourRev) / yourRev : (mktRev > 0 ? Infinity : 0)
+    });
+  }
+  const priority = {red: 0, orange: 1, blue: 2, yellow: 3, green: 4, gray: 5};
+  rows.sort((a, b) => priority[a.signal] - priority[b.signal] || b.mktRev - a.mktRev);
+  return {rows, softCutoff, am, sh, ex};
+}
+
+function renderOppMap() {
+  const s = state.oppmap;
+  // Populate selects
+  const amSnaps = snapshotsFor('amazon'), shSnaps = snapshotsFor('shopify'), exSnaps = snapshotsFor('external');
+  const fill = (id, snaps, cur) => {
+    document.getElementById(id).innerHTML = '<option value="">— None —</option>' +
+      snaps.map(s => `<option value="${s.id}" ${s.id === cur ? 'selected' : ''}>${s.label}</option>`).join('');
+  };
+  fill('oppmap-amazon-select', amSnaps, s.amazonId);
+  fill('oppmap-shopify-select', shSnaps, s.shopifyId);
+  fill('oppmap-external-select', exSnaps, s.externalId);
+
+  const map = computeOpportunityMap();
+  if (!map) {
+    document.getElementById('oppmap-content').style.display = 'none';
+    document.getElementById('oppmap-empty').style.display = 'block';
+    document.getElementById('oppmap-banner').innerHTML = '';
+    return;
+  }
+  document.getElementById('oppmap-content').style.display = 'block';
+  document.getElementById('oppmap-empty').style.display = 'none';
+  const parts = [];
+  if (map.am) parts.push(`Amazon <strong>${map.am.label}</strong>`);
+  if (map.sh) parts.push(`Shopify <strong>${map.sh.label}</strong>`);
+  parts.push(`vs Market <strong>${map.ex.label}</strong>`);
+  document.getElementById('oppmap-banner').innerHTML = parts.join(' + ') +
+    ` &nbsp; <span class="small">Soft-market cutoff: ${fmt$(map.softCutoff)}</span>`;
+
+  // Signal count cards
+  const counts = {};
+  for (const r of map.rows) counts[r.signal] = (counts[r.signal] || 0) + 1;
+  const sigInfo = {
+    red: {icon: '🔴', label: 'Missing opportunity'},
+    orange: {icon: '🟠', label: 'Losing category'},
+    blue: {icon: '🔵', label: 'Soft market — cut in'},
+    yellow: {icon: '🟡', label: 'Watch'},
+    green: {icon: '🟢', label: 'You dominate'},
+    gray: {icon: '⚪', label: 'Dead category'}
+  };
+  document.getElementById('oppmap-signal-cards').innerHTML =
+    Object.entries(sigInfo).map(([k, v]) =>
+      `<div class="card"><div class="label">${v.icon} ${v.label}</div><div class="value">${fmtN(counts[k] || 0)}</div></div>`).join('');
+
+  // Filter by signal & search
+  const search = (document.getElementById('oppmap-search').value || '').toLowerCase();
+  let filtered = map.rows;
+  if (s.sigFilter !== 'all') filtered = filtered.filter(r => r.signal === s.sigFilter);
+  if (search) filtered = filtered.filter(r => r.genus.toLowerCase().includes(search));
+
+  // Table
+  const cols = [
+    {label: 'Signal', k: 'signal'},
+    {label: 'Genus', k: 'genus'},
+    {label: 'Your Amazon', k: 'amazon', num: true, fmt: fmt$},
+    {label: 'Your Shopify', k: 'shopify', num: true, fmt: fmt$},
+    {label: 'Your total', k: 'yourRev', num: true, fmt: fmt$},
+    {label: 'Market units', k: 'mktUnits', num: true, fmt: fmtN},
+    {label: 'Market rev (est.)', k: 'mktRev', num: true, fmt: fmt$},
+    {label: 'Action', k: 'action'}
+  ];
+  document.getElementById('oppmap-thead').innerHTML = cols.map(c =>
+    `<th class="${c.num ? 'num' : ''}">${c.label}</th>`).join('');
+  document.getElementById('oppmap-tbody').innerHTML = filtered.map(r =>
+    `<tr>${cols.map(c => {
+      if (c.k === 'signal') return `<td><span class="badge sig-${r.signal}">${sigInfo[r.signal].icon}</span></td>`;
+      return `<td class="${c.num ? 'num' : ''}">${c.fmt ? c.fmt(r[c.k]) : (r[c.k] || '')}</td>`;
+    }).join('')}</tr>`).join('');
+  document.getElementById('oppmap-count').textContent = filtered.length + ' genera';
+}
+
+// ============================================================
+// EXTERNAL DOWNLOADS
+// ============================================================
+function downloadExternalClean() {
+  const snap = snapshots.find(s => s.id === state.external.snapshotId);
+  if (!snap) return;
+  const rows = snap.products.map(p => ({
+    'Order #': p.orderId, 'Order Date': p.orderDate, 'Raw Store': p.rawStore,
+    'Parent Brand': p.store, 'SKU': p.sku, 'Item Name': p.title,
+    'Genus': p.genus, 'Quantity': p.units,
+    'Order Total ($)': (p.orderTotal || 0).toFixed(2),
+    'Est. Line Rev ($)': (p.estRev || 0).toFixed(2)
+  }));
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'External Line Items');
+  XLSX.writeFile(wb, `external-clean-${snap.label.replace(/\s+/g, '')}.xlsx`);
+}
+
+function downloadExternalBreakdown() {
+  const snap = snapshots.find(s => s.id === state.external.snapshotId);
+  if (!snap) return;
+  const wb = XLSX.utils.book_new();
+  // Summary sheet
+  const byStore = aggregateExternalByStore(snap.products, state.external.groupByParent);
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(byStore.map(s => ({
+    Store: s.store, Orders: s.orders, Units: s.units,
+    'Revenue ($)': s.rev.toFixed(2), 'AOV ($)': s.aov.toFixed(2)
+  }))), 'Summary by Store');
+  // Genus sheet (all stores combined)
+  const genera = aggregateExternalByGenus(snap.products);
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(genera.map(g => ({
+    Genus: g.genus, Units: g.units, 'Est. Rev ($)': g.estRev.toFixed(2),
+    Orders: g.orders, SKUs: g.skus
+  }))), 'Genera - All Stores');
+  // Per-store: one sheet per store with top plants
+  for (const s of byStore) {
+    const plants = aggregateExternalByPlant(s.products).slice(0, 200);
+    const sheetName = (s.store.length > 30 ? s.store.slice(0, 30) : s.store).replace(/[\/\\\?\*\[\]:]/g, ' ');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(plants.map(p => ({
+      Plant: p.title, SKU: p.sku, Genus: p.genus,
+      Units: p.units, 'Est. Rev ($)': p.estRev.toFixed(2), Orders: p.orders
+    }))), sheetName);
+  }
+  XLSX.writeFile(wb, `external-breakdown-${snap.label.replace(/\s+/g, '')}.xlsx`);
+}
+
+function downloadExternalTopPlants() {
+  const snap = snapshots.find(s => s.id === state.external.snapshotId);
+  if (!snap) return;
+  const thresh = state.external.topThreshold;
+  const plants = aggregateExternalByPlant(snap.products).filter(p => p.units >= thresh);
+  const csv = 'Plant,SKU,Genus,Units,Est. Rev ($),Orders,Stores\n' +
+    plants.map(p => [
+      `"${(p.title || '').replace(/"/g, '""')}"`, p.sku || '', p.genus || '',
+      p.units, p.estRev.toFixed(2), p.orders, p.storeCount
+    ].join(',')).join('\n');
+  const blob = new Blob([csv], {type: 'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `external-top-plants-${snap.label.replace(/\s+/g, '')}.csv`;
+  a.click(); URL.revokeObjectURL(url);
+}
+
+function downloadOppMap() {
+  const map = computeOpportunityMap();
+  if (!map) return;
+  const sigLabels = {
+    red: "MISSING - list it",
+    orange: "LOSING - investigate",
+    blue: "SOFT MARKET - cut in",
+    yellow: "WATCH - both selling",
+    green: "DOMINATE - confirm moat",
+    gray: "DEAD - ignore"
+  };
+  const rows = map.rows.map(r => ({
+    Signal: sigLabels[r.signal],
+    Genus: r.genus,
+    "Your Amazon ($)": r.amazon.toFixed(2),
+    "Your Shopify ($)": r.shopify.toFixed(2),
+    "Your Total ($)": r.yourRev.toFixed(2),
+    "Market Units": r.mktUnits,
+    "Market Rev (est. $)": r.mktRev.toFixed(2),
+    Action: r.action
+  }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Opportunity Map");
+  const label = (map.ex.label || "").replace(/\s+/g, "");
+  XLSX.writeFile(wb, "opportunity-map-" + label + ".xlsx");
+}
+
+// ============================================================
+// EVENT HANDLERS — External Stores & Opportunity Map
+// ============================================================
+function setupExternalHandlers() {
+  document.getElementById("external-snap-select").addEventListener("change", function(e) {
+    state.external.snapshotId = e.target.value || null;
+    state.external.drillGenus = null;
+    state.external.storeFilter = "all";
+    renderExternal();
+  });
+  document.getElementById("external-compare-select").addEventListener("change", function(e) {
+    state.external.compareId = e.target.value || null;
+    state.external.mode = state.external.compareId ? "compare" : "single";
+    renderExternal();
+  });
+  document.getElementById("external-group-parent").addEventListener("change", function(e) {
+    state.external.groupByParent = e.target.checked;
+    state.external.storeFilter = "all";
+    renderExternal();
+  });
+  document.getElementById("external-store-filter").addEventListener("change", function(e) {
+    state.external.storeFilter = e.target.value;
+    state.external.drillGenus = null;
+    renderExternal();
+  });
+  document.getElementById("external-genus-search").addEventListener("input", renderExternal);
+  document.getElementById("external-prod-search").addEventListener("input", renderExternal);
+  document.getElementById("external-close-drill").addEventListener("click", closeExternalDrill);
+  document.getElementById("external-download").addEventListener("click", downloadExternalClean);
+  document.getElementById("external-download-breakdown").addEventListener("click", downloadExternalBreakdown);
+  document.getElementById("external-tp-download").addEventListener("click", downloadExternalTopPlants);
+  var addBtn = document.getElementById("external-addfile-btn");
+  if (addBtn) addBtn.addEventListener("click", function() {
+    document.getElementById("external-file-input").click();
+  });
+  var thBtns = document.querySelectorAll("#tab-external [data-ext-thresh]");
+  for (var i = 0; i < thBtns.length; i++) {
+    (function(btn) {
+      btn.addEventListener("click", function() {
+        state.external.topThreshold = +btn.dataset.extThresh;
+        var all = document.querySelectorAll("#tab-external [data-ext-thresh]");
+        for (var j = 0; j < all.length; j++) all[j].classList.toggle("active", all[j] === btn);
+        renderExternal();
+      });
+    })(thBtns[i]);
+  }
+}
+
+function setupOppMapHandlers() {
+  document.getElementById("oppmap-amazon-select").addEventListener("change", function(e) {
+    state.oppmap.amazonId = e.target.value || null; renderOppMap();
+  });
+  document.getElementById("oppmap-shopify-select").addEventListener("change", function(e) {
+    state.oppmap.shopifyId = e.target.value || null; renderOppMap();
+  });
+  document.getElementById("oppmap-external-select").addEventListener("change", function(e) {
+    state.oppmap.externalId = e.target.value || null; renderOppMap();
+  });
+  document.getElementById("oppmap-search").addEventListener("input", renderOppMap);
+  document.getElementById("oppmap-download").addEventListener("click", downloadOppMap);
+  var sigBtns = document.querySelectorAll("#tab-oppmap [data-sig]");
+  for (var i = 0; i < sigBtns.length; i++) {
+    (function(btn) {
+      btn.addEventListener("click", function() {
+        state.oppmap.sigFilter = btn.dataset.sig;
+        var all = document.querySelectorAll("#tab-oppmap [data-sig]");
+        for (var j = 0; j < all.length; j++) all[j].classList.toggle("active", all[j] === btn);
+        renderOppMap();
+      });
+    })(sigBtns[i]);
+  }
+}
