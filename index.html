@@ -57,6 +57,9 @@
   .badge.shopify{background:#e8f5e9;color:var(--up)}
   .badge.balanced{background:#f5f5f5;color:#666}
   .badge.airplant{background:#e0f7fa;color:#006064}
+  .badge.type-succulent{background:#e8f5e9;color:#1b5e20}
+  .badge.type-houseplant{background:#e3f2fd;color:#0d47a1}
+  .badge.type-airplant{background:#e0f7fa;color:#006064}
   .badge.external{background:#fff3e0;color:#e65100}
   .badge.owned{background:#e8f5e9;color:var(--up)}
   .badge.sig-red{background:#ffebee;color:#c62828}
@@ -349,7 +352,12 @@
     <label>Owned (Amazon)</label><select id="oppmap-amazon-select"></select>
     <label>Owned (Shopify)</label><select id="oppmap-shopify-select"></select>
     <label>Market (External)</label><select id="oppmap-external-select"></select>
-    <div class="right"><button class="tab" id="oppmap-download">&#8595; Download map</button></div>
+    <label>Store filter</label><select id="oppmap-store-filter" title="Narrow market side to a specific external store"></select>
+    <div class="right">
+      <button class="tab" id="oppmap-preset-amazon" title="Filter market side to Amazon (MCG) only for apples-to-apples comparison with your Amazon">Amazon head-to-head</button>
+      <button class="tab" id="oppmap-preset-all">All market</button>
+      <button class="tab" id="oppmap-download">&#8595; Download map</button>
+    </div>
   </div>
   <div class="banner" id="oppmap-banner"></div>
   <div id="oppmap-empty" class="empty" style="display:block">
@@ -421,7 +429,6 @@
 
 <div class="modal" id="manage-modal">
   <div class="modal-box">
-    <h2>Saved snapshots</h2>
     <p class="small">These are stored in your browser only. Clearing browser data or using a different device/browser will lose them.</p>
     <div id="manage-body"></div>
     <div class="right"><button class="tab" id="manage-close">Close</button></div>
@@ -430,6 +437,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
 <script src="genus-data.js"></script>
 <script src="app.js"></script>
 
