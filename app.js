@@ -18,17 +18,52 @@ let showNonPlant = false;
 // ============================================================
 // SNAPSHOT STORAGE
 // ============================================================
+const STORAGE_KEY_LZ = STORAGE_KEY + "-lz";
 function loadSnapshots(){
   try {
+    // Prefer compressed form
+    const lz = localStorage.getItem(STORAGE_KEY_LZ);
+    if (lz && typeof LZString !== "undefined") {
+      const raw = LZString.decompressFromUTF16(lz);
+      if (raw) return JSON.parse(raw);
+    }
+    // Legacy uncompressed
     const raw = localStorage.getItem(STORAGE_KEY);
     return raw ? JSON.parse(raw) : [];
   } catch(e){ console.warn("Failed to load snapshots:", e); return []; }
 }
+function _snapshotSize(s) {
+  try { return LZString.compressToUTF16(JSON.stringify(s)).length * 2; }
+  catch(e) { return JSON.stringify(s).length * 2; }
+}
 function saveSnapshots(){
+  const json = JSON.stringify(snapshots);
+  // Compress if LZ-string is loaded, else fall back to raw
+  const packed = (typeof LZString !== "undefined")
+    ? LZString.compressToUTF16(json)
+    : null;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshots));
+    if (packed) {
+      localStorage.setItem(STORAGE_KEY_LZ, packed);
+      // Best-effort cleanup of the legacy key
+      try { localStorage.removeItem(STORAGE_KEY); } catch(_) {}
+    } else {
+      localStorage.setItem(STORAGE_KEY, json);
+    }
   } catch(e){
-    alert("Couldn't save — browser storage is full. Delete an old snapshot and try again.");
+    // Diagnose: find biggest snapshot(s)
+    const sizes = snapshots.map(s => ({
+      id: s.id, source: s.source, label: s.label,
+      skus: (s.products || []).length,
+      kb: Math.round(_snapshotSize(s) / 1024)
+    })).sort((a, b) => b.kb - a.kb);
+    const biggest = sizes.slice(0, 3).map(s =>
+      `- ${s.source} ${s.label} (${s.skus} SKUs, ~${s.kb} KB)`).join("\n");
+    alert(
+      "Browser storage is full — this snapshot couldn't be saved.\n\n" +
+      "Your 3 biggest snapshots are:\n" + biggest + "\n\n" +
+      "Delete one of the large ones (usually the External Stores line-item file) to make room."
+    );
   }
 }
 function addSnapshot(snap){
@@ -1534,10 +1569,16 @@ function openManage(){
   if (!snapshots.length){
     body.innerHTML = '<p class="empty">No saved snapshots yet.</p>';
   } else {
-    body.innerHTML = `<table><thead><tr><th>Source</th><th>Period</th><th>SKUs</th><th>Uploaded</th><th></th></tr></thead><tbody>${
-      snapshots.slice().sort((a,b) => b.uploadedAt.localeCompare(a.uploadedAt)).map(s =>
-        `<tr><td><span class="badge ${s.source}">${s.source}</span></td><td>${s.label}</td><td>${s.products.length}</td><td>${new Date(s.uploadedAt).toLocaleDateString()}</td><td><button class="tab" data-edit="${s.id}">Edit period</button> <button class="tab danger" data-del="${s.id}">Delete</button></td></tr>`
-      ).join('')}</tbody></table>`;
+    const rows = snapshots.slice().sort((a,b) => b.uploadedAt.localeCompare(a.uploadedAt));
+    const sizes = rows.map(s => Math.round(_snapshotSize(s) / 1024));
+    const totalKB = sizes.reduce((a,b) => a+b, 0);
+    body.innerHTML = `<p class="small">Compressed storage used: ~<strong>${totalKB.toLocaleString()} KB</strong> across ${rows.length} snapshots. Browsers typically allow 5,000&ndash;10,000 KB per site.</p>
+      <table><thead><tr><th>Source</th><th>Period</th><th>SKUs</th><th class="num">Size</th><th>Uploaded</th><th></th></tr></thead><tbody>${
+      rows.map((s, i) => {
+        const kb = sizes[i];
+        const isBig = kb > 500;
+        return `<tr><td><span class="badge ${s.source}">${s.source}</span></td><td>${s.label}</td><td>${s.products.length}</td><td class="num" ${isBig?'style="color:#c62828;font-weight:600"':''}>${kb.toLocaleString()} KB</td><td>${new Date(s.uploadedAt).toLocaleDateString()}</td><td><button class="tab" data-edit="${s.id}">Edit period</button> <button class="tab danger" data-del="${s.id}">Delete</button></td></tr>`;
+      }).join('')}</tbody></table>`;
     body.querySelectorAll('[data-edit]').forEach(btn =>
       btn.addEventListener('click', () => editSnapshotPeriod(btn.dataset.edit)));
     body.querySelectorAll('[data-del]').forEach(btn =>
@@ -1666,7 +1707,8 @@ state.external = { snapshotId: null, mode: 'single', compareId: null,
                    groupByParent: true, drillGenus: null, storeFilter: 'all',
                    topThreshold: 10, chart: null };
 state.oppmap   = { amazonId: null, shopifyId: null, externalId: null,
-                   sigFilter: 'all', softThreshold: 25 };
+                   sigFilter: 'all', softThreshold: 25,
+                   storeFilter: 'all', storeGroupByParent: true };
 state.topPlants.external = { threshold: 10, sortCol: null, sortDir: 'desc' };
 state.genusSort.external = { col: 1, dir: 'desc' };  // 1 = units desc
 
@@ -1861,7 +1903,21 @@ function renderExternalFocusCards(byStore) {
     container.innerHTML = '<div class="small">No focus stores found in this file. All external stores shown below.</div>';
     return;
   }
-  container.innerHTML = focus.map(s => renderStoreCard(s, true)).join('');
+  // Also surface MCG's Amazon store as its own callout — even in grouped mode
+  const snap = snapshots.find(x => x.id === state.external.snapshotId);
+  let extraCards = '';
+  if (snap && state.external.groupByParent) {
+    const mcgAmazonProducts = snap.products.filter(p => p.rawStore === 'Amazon (MCG)');
+    if (mcgAmazonProducts.length) {
+      const mcgAmazon = aggregateExternalByStore(mcgAmazonProducts, false)[0];
+      if (mcgAmazon) {
+        // Rename for the card so it reads as a sub-brand callout
+        mcgAmazon.store = 'MCG Amazon (breakdown)';
+        extraCards = renderStoreCard(mcgAmazon, false);
+      }
+    }
+  }
+  container.innerHTML = focus.map(s => renderStoreCard(s, true)).join('') + extraCards;
 }
 
 function renderExternalOtherStores(byStore) {
@@ -1920,6 +1976,7 @@ function renderExternalGenusTable(genera) {
     (!search || g.genus.toLowerCase().includes(search)));
   const cols = [
     {key: 'genus', label: 'Genus'},
+    {key: 'type', label: 'Type'},
     {key: 'units', label: 'Units', num: true, fmt: fmtN},
     {key: 'estRev', label: 'Est. revenue', num: true, fmt: fmt$},
     {key: 'orders', label: 'Orders', num: true, fmt: fmtN},
@@ -1928,13 +1985,22 @@ function renderExternalGenusTable(genera) {
   const ss = state.genusSort.external;
   const sorted = [...items].sort((a, b) => {
     const kv = cols[ss.col].key, dir = ss.dir === 'asc' ? 1 : -1;
+    if (kv === 'type') {
+      const at = getType(a.genus) || '', bt = getType(b.genus) || '';
+      return at.localeCompare(bt) * dir;
+    }
     return (a[kv] > b[kv] ? 1 : a[kv] < b[kv] ? -1 : 0) * dir;
   });
   document.getElementById('external-genus-thead').innerHTML = cols.map((c, i) =>
     `<th class="${c.num ? 'num' : ''}" data-genus-sort="${i}">${c.label}${i === ss.col ? (ss.dir === 'asc' ? ' ▲' : ' ▼') : ''}</th>`).join('');
-  document.getElementById('external-genus-tbody').innerHTML = sorted.map(g =>
-    `<tr class="clickable" data-drill-genus="${g.genus}">${cols.map(c =>
-      `<td class="${c.num ? 'num' : ''}">${c.fmt ? c.fmt(g[c.key]) : g[c.key]}</td>`).join('')}</tr>`).join('');
+  document.getElementById('external-genus-tbody').innerHTML = sorted.map(g => {
+    const t = getType(g.genus);
+    const typeCell = t ? `<span class="badge type-${t.toLowerCase().replace(/\s/g,'')}">${t}</span>` : '';
+    return `<tr class="clickable" data-drill-genus="${g.genus}">${cols.map(c => {
+      if (c.key === 'type') return `<td>${typeCell}</td>`;
+      return `<td class="${c.num ? 'num' : ''}">${c.fmt ? c.fmt(g[c.key]) : g[c.key]}</td>`;
+    }).join('')}</tr>`;
+  }).join('');
   document.getElementById('external-genus-count').textContent = sorted.length + ' genera';
   document.getElementById('external-genus-thead').querySelectorAll('[data-genus-sort]').forEach(th =>
     th.addEventListener('click', () => {
@@ -2065,7 +2131,14 @@ function computeOpportunityMap() {
   if (sh) addOwned(sh.products, 'shopify');
 
   // External genera (units + est. rev, aggregated across all stores in that snapshot)
-  const extAgg = aggregateExternalByGenus(ex.products);
+  // Apply store filter if user narrowed to a specific external store (e.g. "Amazon (MCG)")
+  let extProducts = ex.products;
+  const sf = state.oppmap.storeFilter;
+  if (sf && sf !== 'all') {
+    extProducts = extProducts.filter(p =>
+      state.oppmap.storeGroupByParent ? p.store === sf : p.rawStore === sf);
+  }
+  const extAgg = aggregateExternalByGenus(extProducts);
   const extMap = Object.fromEntries(extAgg.map(g => [g.genus, g]));
 
   // Compute soft market threshold: 25th percentile of external genera revenue
@@ -2120,6 +2193,19 @@ function renderOppMap() {
   fill('oppmap-shopify-select', shSnaps, s.shopifyId);
   fill('oppmap-external-select', exSnaps, s.externalId);
 
+  // Populate store-filter dropdown from the chosen external snapshot
+  const exSnap = s.externalId ? snapshots.find(x => x.id === s.externalId) : null;
+  const storeFilterEl = document.getElementById('oppmap-store-filter');
+  if (storeFilterEl) {
+    if (exSnap) {
+      const stores = aggregateExternalByStore(exSnap.products, s.storeGroupByParent);
+      storeFilterEl.innerHTML = '<option value="all">All external stores</option>' +
+        stores.map(st => `<option value="${st.store}" ${st.store === s.storeFilter ? 'selected' : ''}>${st.store} (${fmt$(st.rev)})</option>`).join('');
+    } else {
+      storeFilterEl.innerHTML = '<option value="all">All external stores</option>';
+    }
+  }
+
   const map = computeOpportunityMap();
   if (!map) {
     document.getElementById('oppmap-content').style.display = 'none';
@@ -2132,7 +2218,10 @@ function renderOppMap() {
   const parts = [];
   if (map.am) parts.push(`Amazon <strong>${map.am.label}</strong>`);
   if (map.sh) parts.push(`Shopify <strong>${map.sh.label}</strong>`);
-  parts.push(`vs Market <strong>${map.ex.label}</strong>`);
+  const mktLabel = (s.storeFilter && s.storeFilter !== 'all')
+    ? `<strong>${s.storeFilter}</strong> (${map.ex.label})`
+    : `Market <strong>${map.ex.label}</strong>`;
+  parts.push('vs ' + mktLabel);
   document.getElementById('oppmap-banner').innerHTML = parts.join(' + ') +
     ` &nbsp; <span class="small">Soft-market cutoff: ${fmt$(map.softCutoff)}</span>`;
 
@@ -2161,6 +2250,7 @@ function renderOppMap() {
   const cols = [
     {label: 'Signal', k: 'signal'},
     {label: 'Genus', k: 'genus'},
+    {label: 'Type', k: 'type'},
     {label: 'Your Amazon', k: 'amazon', num: true, fmt: fmt$},
     {label: 'Your Shopify', k: 'shopify', num: true, fmt: fmt$},
     {label: 'Your total', k: 'yourRev', num: true, fmt: fmt$},
@@ -2170,11 +2260,15 @@ function renderOppMap() {
   ];
   document.getElementById('oppmap-thead').innerHTML = cols.map(c =>
     `<th class="${c.num ? 'num' : ''}">${c.label}</th>`).join('');
-  document.getElementById('oppmap-tbody').innerHTML = filtered.map(r =>
-    `<tr>${cols.map(c => {
+  document.getElementById('oppmap-tbody').innerHTML = filtered.map(r => {
+    const t = getType(r.genus);
+    const typeBadge = t ? `<span class="badge type-${t.toLowerCase().replace(/\s/g,'')}">${t}</span>` : '';
+    return `<tr>${cols.map(c => {
       if (c.k === 'signal') return `<td><span class="badge sig-${r.signal}">${sigInfo[r.signal].icon}</span></td>`;
+      if (c.k === 'type') return `<td>${typeBadge}</td>`;
       return `<td class="${c.num ? 'num' : ''}">${c.fmt ? c.fmt(r[c.k]) : (r[c.k] || '')}</td>`;
-    }).join('')}</tr>`).join('');
+    }).join('')}</tr>`;
+  }).join('');
   document.getElementById('oppmap-count').textContent = filtered.length + ' genera';
 }
 
@@ -2325,7 +2419,23 @@ function setupOppMapHandlers() {
     state.oppmap.shopifyId = e.target.value || null; renderOppMap();
   });
   document.getElementById("oppmap-external-select").addEventListener("change", function(e) {
-    state.oppmap.externalId = e.target.value || null; renderOppMap();
+    state.oppmap.externalId = e.target.value || null;
+    state.oppmap.storeFilter = "all";
+    renderOppMap();
+  });
+  document.getElementById("oppmap-store-filter").addEventListener("change", function(e) {
+    state.oppmap.storeFilter = e.target.value || "all";
+    renderOppMap();
+  });
+  document.getElementById("oppmap-preset-amazon").addEventListener("click", function() {
+    state.oppmap.storeGroupByParent = false;
+    state.oppmap.storeFilter = "Amazon (MCG)";
+    renderOppMap();
+  });
+  document.getElementById("oppmap-preset-all").addEventListener("click", function() {
+    state.oppmap.storeGroupByParent = true;
+    state.oppmap.storeFilter = "all";
+    renderOppMap();
   });
   document.getElementById("oppmap-search").addEventListener("input", renderOppMap);
   document.getElementById("oppmap-download").addEventListener("click", downloadOppMap);
