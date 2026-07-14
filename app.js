@@ -1810,6 +1810,7 @@ state.oppmap   = { amazonId: null, shopifyId: null, externalId: null,
                    plantSort: {col: 3, dir: 'desc'} };
 state.ovm      = { plantFilter: 'all', plantThreshold: 10,
                    crossPlantFilter: 'all',
+                   drillGenus: null,
                    amazonId: null, shopifyId: null, externalId: null,
                    storeFilter: 'all', storeGroupByParent: true,
                    rowFilter: 'all', sort: {col: 4, dir: 'desc'}, chart: null };
@@ -2720,7 +2721,9 @@ function renderOwnedVsMarket() {
   }).join("");
   document.getElementById("ovm-tbody").innerHTML = filtered.map(function(r){
     var typeBadge = r.type ? '<span class="badge type-' + r.type.toLowerCase().replace(/\s/g, "") + '">' + r.type + '</span>' : "";
-    return "<tr>" + cols.map(function(c){
+    var isSelected = state.ovm.drillGenus === r.genus;
+    var rowStyle = isSelected ? ' style="background:#e8f5e9;font-weight:600"' : '';
+    return '<tr class="clickable" data-drill-genus="' + r.genus.replace(/"/g,'&quot;') + '"' + rowStyle + '>' + cols.map(function(c){
       if (c.k === "type") return "<td>" + typeBadge + "</td>";
       return '<td class="' + (c.num ? "num" : "") + '">' + (c.fmt ? c.fmt(r[c.k] || 0) : (r[c.k] || "")) + '</td>';
     }).join("") + "</tr>";
@@ -2732,6 +2735,17 @@ function renderOwnedVsMarket() {
       if (ss.col === idx) ss.dir = ss.dir === "asc" ? "desc" : "asc";
       else { ss.col = idx; ss.dir = "desc"; }
       renderOwnedVsMarket();
+    });
+  });
+  document.getElementById("ovm-tbody").querySelectorAll("[data-drill-genus]").forEach(function(tr){
+    tr.addEventListener("click", function(){
+      var g = tr.dataset.drillGenus;
+      // Toggle: click again to clear
+      state.ovm.drillGenus = (state.ovm.drillGenus === g) ? null : g;
+      renderOwnedVsMarket();
+      // Scroll to SKU panel so drill result is visible
+      var skuPanel = document.getElementById("ovm-plant-tbody");
+      if (skuPanel && skuPanel.parentElement) skuPanel.parentElement.parentElement.scrollIntoView({behavior: "smooth", block: "start"});
     });
   });
   // Also render the SKU / plant panel
@@ -3058,12 +3072,32 @@ function renderOvmPlantPanel() {
   }
   var s = state.ovm;
   var search = (document.getElementById("ovm-plant-search").value || "").toLowerCase();
-  var filtered = rows.filter(function(r){return r.mktUnits >= (s.plantThreshold || 10);});
+  // If a genus was clicked in the per-genus table, filter to that genus only
+  // (and relax the min-units threshold so all plants in that genus are visible).
+  var drill = s.drillGenus;
+  var filtered = rows;
+  if (drill) {
+    filtered = filtered.filter(function(r){return r.genus === drill;});
+  } else {
+    filtered = filtered.filter(function(r){return r.mktUnits >= (s.plantThreshold || 10);});
+  }
   if (s.plantFilter === "missing") filtered = filtered.filter(function(r){return r.status === "missing";});
   else if (s.plantFilter === "both") filtered = filtered.filter(function(r){return r.status === "both";});
   else if (s.plantFilter === "nonplant") filtered = filtered.filter(function(r){return !r.isPlant;});
   if (search) filtered = filtered.filter(function(r){return (r.title||"").toLowerCase().indexOf(search)>=0 || (r.sku||"").toLowerCase().indexOf(search)>=0;});
   filtered.sort(function(a, b){return b.mktUnits - a.mktUnits;});
+  // Reflect drill state in the count pill
+  var pillEl = document.getElementById("ovm-plant-count");
+  if (drill) {
+    pillEl.innerHTML = filtered.length + ' items in <strong style="color:#2e7d32">' + drill + '</strong> <button class="tab danger" id="ovm-plant-clear-drill" style="margin-left:8px;padding:2px 8px">Clear</button>';
+    setTimeout(function(){
+      var btn = document.getElementById("ovm-plant-clear-drill");
+      if (btn) btn.addEventListener("click", function(){
+        state.ovm.drillGenus = null;
+        renderOwnedVsMarket();
+      });
+    }, 0);
+  }
 
   var cols = [
     {label: "Plant / Item", k: "title"},
@@ -3088,7 +3122,8 @@ function renderOvmPlantPanel() {
       return '<td class="' + (c.num?"num":"") + '">' + (c.fmt ? c.fmt(r[c.k] || 0) : (r[c.k] || "")) + '</td>';
     }).join("") + "</tr>";
   }).join("");
-  count.textContent = filtered.length + " items";
+  // Only set plain count text if drill isn't active (drill already renders its own pill with Clear button)
+  if (!drill) count.textContent = filtered.length + " items";
 }
 
 // Cross-channel plant panel: Amazon vs Shopify per SKU
@@ -3171,7 +3206,6 @@ function renderCrossPlantPanel() {
     return "<tr>" + cols.map(function(c){
       if (c.k === "type") return "<td>" + typeBadge + "</td>";
       if (c.k === "status") return "<td>" + prefBadge + "</td>";
-      return '<td class="' + (c.num?"num":"") + '">' + (c.fmt ? c.fmt(r[c.k] || 0) : (r[c.k] || "")) + '</td>';
     }).join("") + "</tr>";
   }).join("");
   count.textContent = filtered.length + " items";
