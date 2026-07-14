@@ -1566,13 +1566,23 @@ function renderCrossInsights(aSnap, sSnap, overlap){
 function openManage(){
   const modal = document.getElementById('manage-modal');
   const body = document.getElementById('manage-body');
+  const backupControls = `<div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin:10px 0;background:#f9fbf9">
+    <strong style="font-size:13px">Backup &amp; restore</strong>
+    <div class="small" style="margin:4px 0 8px 0">Browsers can wipe local storage unexpectedly. Export your snapshots to a file for safekeeping, then re-import if you ever lose them or switch devices/browsers.</div>
+    <button class="tab" id="mng-export">&#8595; Export all snapshots (JSON)</button>
+    <button class="tab" id="mng-import-btn">&#8593; Import from JSON file</button>
+    <input type="file" id="mng-import-file" accept=".json" style="display:none">
+  </div>`;
   if (!snapshots.length){
-    body.innerHTML = '<p class="empty">No saved snapshots yet.</p>';
+    body.innerHTML = backupControls + '<p class="empty">No saved snapshots yet.</p>';
+    wireManageBackup(body);
+    modal.style.display = 'flex';
+    return;
   } else {
     const rows = snapshots.slice().sort((a,b) => b.uploadedAt.localeCompare(a.uploadedAt));
     const sizes = rows.map(s => Math.round(_snapshotSize(s) / 1024));
     const totalKB = sizes.reduce((a,b) => a+b, 0);
-    body.innerHTML = `<p class="small">Compressed storage used: ~<strong>${totalKB.toLocaleString()} KB</strong> across ${rows.length} snapshots. Browsers typically allow 5,000&ndash;10,000 KB per site.</p>
+    body.innerHTML = backupControls + `<p class="small">Compressed storage used: ~<strong>${totalKB.toLocaleString()} KB</strong> across ${rows.length} snapshots. Browsers typically allow 5,000&ndash;10,000 KB per site.</p>
       <table><thead><tr><th>Source</th><th>Period</th><th>SKUs</th><th class="num">Size</th><th>Uploaded</th><th></th></tr></thead><tbody>${
       rows.map((s, i) => {
         const kb = sizes[i];
@@ -1598,8 +1608,77 @@ function openManage(){
           openManage(); renderTab(activeTab);
         }
       }));
+    wireManageBackup(body);
   }
   modal.style.display = 'flex';
+}
+
+function wireManageBackup(body) {
+  const exportBtn = body.querySelector('#mng-export');
+  const importBtn = body.querySelector('#mng-import-btn');
+  const importFile = body.querySelector('#mng-import-file');
+  if (exportBtn) exportBtn.addEventListener('click', exportAllSnapshots);
+  if (importBtn && importFile) {
+    importBtn.addEventListener('click', () => importFile.click());
+    importFile.addEventListener('change', e => {
+      if (e.target.files[0]) importSnapshotsFromFile(e.target.files[0]);
+    });
+  }
+}
+
+function exportAllSnapshots() {
+  if (!snapshots.length) { alert('No snapshots to export.'); return; }
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    version: 1,
+    snapshots
+  };
+  const blob = new Blob([JSON.stringify(payload)], {type: 'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `sb-analyzer-snapshots-${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function importSnapshotsFromFile(file) {
+  try {
+    const text = await file.text();
+    const payload = JSON.parse(text);
+    const incoming = Array.isArray(payload) ? payload : (payload.snapshots || []);
+    if (!Array.isArray(incoming) || !incoming.length) {
+      alert('That file does not contain any snapshots.');
+      return;
+    }
+    // Validate shape minimally
+    for (const s of incoming) {
+      if (!s.id || !s.source || !Array.isArray(s.products)) {
+        alert('Import failed — file is not a valid snapshots export.');
+        return;
+      }
+    }
+    // Merge: existing IDs stay, new IDs get added; ask before overwriting duplicates
+    const existingIds = new Set(snapshots.map(s => s.id));
+    const dup = incoming.filter(s => existingIds.has(s.id));
+    let overwrite = false;
+    if (dup.length) {
+      overwrite = confirm(`${dup.length} snapshot(s) in the import file already exist. Overwrite them?\n\nClick OK to overwrite, Cancel to skip duplicates.`);
+    }
+    if (overwrite) {
+      const incomingIds = new Set(incoming.map(s => s.id));
+      snapshots = snapshots.filter(s => !incomingIds.has(s.id)).concat(incoming);
+    } else {
+      snapshots = snapshots.concat(incoming.filter(s => !existingIds.has(s.id)));
+    }
+    saveSnapshots();
+    alert(`Imported ${incoming.length} snapshot(s). Total now: ${snapshots.length}.`);
+    openManage();
+    renderTab(activeTab);
+  } catch(e) {
+    console.error(e);
+    alert('Import failed: ' + (e.message || e));
+  }
 }
 
 // ============================================================
