@@ -11,15 +11,21 @@ if [ -z "${APP_PASSWORD:-}" ]; then
   exit 1
 fi
 
-echo "[1/2] Inlining JS files into index.html..."
+echo "[1/2] Inlining JS files (incl. lz-string) into index.html..."
 TMP=$(mktemp -d)
+# Ensure lz-string is installed locally so we can inline it (no CDN dependency at runtime)
+npm install lz-string@1.5.0 --no-save 2>&1 | tail -3
 node -e "
 const fs = require('fs');
 let html = fs.readFileSync('index.html','utf8');
 const gd  = fs.readFileSync('genus-data.js','utf8');
 const app = fs.readFileSync('app.js','utf8');
-// IMPORTANT: pass a function as the second arg to .replace() so the file
-// contents aren't interpreted as regex backreferences (\$&, \$1, etc.).
+const lz  = fs.readFileSync('node_modules/lz-string/libs/lz-string.min.js','utf8');
+// Replace the CDN lz-string tag with the inlined library (function callback avoids \$& backref issues)
+html = html.replace(
+  '<script src=\"https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js\"></script>',
+  () => '<script>' + lz + '</script>'
+);
 html = html.replace('<script src=\"genus-data.js\"></script>', () => '<script>' + gd + '</script>');
 html = html.replace('<script src=\"app.js\"></script>',        () => '<script>' + app + '</script>');
 fs.writeFileSync('$TMP/index.html', html);
