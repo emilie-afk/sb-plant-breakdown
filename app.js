@@ -2938,10 +2938,13 @@ function renderPlantOpportunities() {
   }).join("");
   document.getElementById("oppmap-plant-tbody").innerHTML = filtered.slice(0, 500).map(function(r){
     var typeBadge = r.type ? '<span class="badge type-' + r.type.toLowerCase().replace(/\s/g, "") + '">' + r.type + '</span>' : "";
+    var restricted = (typeof isRestricted === "function") && isRestricted(r.sku, r.title);
     var statusBadge;
-    if (r.status === "missing") statusBadge = '<span class="badge sig-red">🔴 not found</span>';
+    if (restricted) statusBadge = '<span class="badge restricted" title="On MCG exclusion list — you cannot sell this">🚫 can\'t sell</span>';
+    else if (r.status === "missing") statusBadge = '<span class="badge sig-red">🔴 not found</span>';
     else statusBadge = '<span class="badge sig-green">🟢 ' + (r.yourSources || "yes") + '</span>';
-    return "<tr>" + cols.map(function(c){
+    var rowCls = restricted ? "restricted-row" : "";
+    return '<tr class="' + rowCls + '">' + cols.map(function(c){
       if (c.k === "type") return "<td>" + typeBadge + "</td>";
       if (c.k === "status") return "<td>" + statusBadge + "</td>";
       return '<td class="' + (c.num ? "num" : "") + '">' + (c.fmt ? c.fmt(r[c.k] || 0) : (r[c.k] || "")) + '</td>';
@@ -3084,6 +3087,9 @@ function renderOvmPlantPanel() {
   if (s.plantFilter === "missing") filtered = filtered.filter(function(r){return r.status === "missing";});
   else if (s.plantFilter === "both") filtered = filtered.filter(function(r){return r.status === "both";});
   else if (s.plantFilter === "nonplant") filtered = filtered.filter(function(r){return !r.isPlant;});
+  else if (s.plantFilter === "restricted") filtered = filtered.filter(function(r){
+    return typeof isRestricted === "function" && isRestricted(r.sku, r.title);
+  });
   if (search) filtered = filtered.filter(function(r){return (r.title||"").toLowerCase().indexOf(search)>=0 || (r.sku||"").toLowerCase().indexOf(search)>=0;});
   filtered.sort(function(a, b){return b.mktUnits - a.mktUnits;});
   // Reflect drill state in the count pill
@@ -3113,10 +3119,17 @@ function renderOvmPlantPanel() {
   thead.innerHTML = cols.map(function(c){return '<th class="' + (c.num?"num":"") + '">' + c.label + '</th>';}).join("");
   tbody.innerHTML = filtered.slice(0, 500).map(function(r){
     var typeBadge = r.type ? '<span class="badge type-' + r.type.toLowerCase().replace(/[\s\/]/g,"") + '">' + r.type + '</span>' : "";
-    var statusBadge = r.status === "missing"
-      ? '<span class="badge sig-red">🔴 not found</span>'
-      : '<span class="badge sig-green">🟢 ' + (r.yourSources || "yes") + '</span>';
-    return "<tr>" + cols.map(function(c){
+    var restricted = (typeof isRestricted === "function") && isRestricted(r.sku, r.title);
+    var statusBadge;
+    if (restricted) {
+      statusBadge = '<span class="badge restricted" title="On MCG exclusion list — you cannot sell this">🚫 can\'t sell</span>';
+    } else if (r.status === "missing") {
+      statusBadge = '<span class="badge sig-red">🔴 not found</span>';
+    } else {
+      statusBadge = '<span class="badge sig-green">🟢 ' + (r.yourSources || "yes") + '</span>';
+    }
+    var rowCls = restricted ? "restricted-row" : "";
+    return '<tr class="' + rowCls + '">' + cols.map(function(c){
       if (c.k === "type") return "<td>" + typeBadge + "</td>";
       if (c.k === "status") return "<td>" + statusBadge + "</td>";
       return '<td class="' + (c.num?"num":"") + '">' + (c.fmt ? c.fmt(r[c.k] || 0) : (r[c.k] || "")) + '</td>';
