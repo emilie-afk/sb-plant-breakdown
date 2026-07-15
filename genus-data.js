@@ -19,64 +19,15 @@ function detectGenus(title){
   }
   return "";
 }
-
-// Genus → plant type, derived from succulentsbox.com collection breakdown.
 const GENUS_TYPE = {
-  // Succulents
-  "Adenia":"Succulent","Adenium":"Succulent","Adromischus":"Succulent","Aeonium":"Succulent",
-  "Agave":"Succulent","Albuca":"Succulent","Aloe":"Succulent","Aloinopsis":"Succulent",
-  "Anacampseros":"Succulent","Argyroderma":"Succulent","Astrophytum":"Succulent",
-  "Austrocylindropuntia":"Succulent","Ceropegia":"Succulent","Cleistocactus":"Succulent",
-  "Corpuscularia":"Succulent","Cotyledon":"Succulent","Crassula":"Succulent","Cremnosedum":"Succulent",
-  "Curio":"Succulent","Echeveria":"Succulent","Echinocactus":"Succulent","Echinocereus":"Succulent",
-  "Echinopsis":"Succulent","Edithcolea":"Succulent","Epiphyllum":"Succulent","Espostoa":"Succulent",
-  "Euphorbia":"Succulent","Faucaria":"Succulent","Fenestraria":"Succulent","Ferocactus":"Succulent",
-  "Gasteraloe":"Succulent","Gasteria":"Succulent","Graptopetalum":"Succulent","Graptosedum":"Succulent",
-  "Graptoveria":"Succulent","Greenovia":"Succulent","Gymnocalycium":"Succulent","Hatiora":"Succulent",
-  "Haworthia":"Succulent","Haworthiopsis":"Succulent","Hoya":"Succulent","Huernia":"Succulent",
-  "Kalanchoe":"Succulent","Lapidaria":"Succulent","Ledebouria":"Succulent","Lepismium":"Succulent",
-  "Lithops":"Succulent","Mammillaria":"Succulent","Mammilloydia":"Succulent","Mangave":"Succulent",
-  "Myrtillocactus":"Succulent","Notocactus":"Succulent","Opuntia":"Succulent","Orostachys":"Succulent",
-  "Oscularia":"Succulent","Othonna":"Succulent","Pachycereus":"Succulent","Pachyphytum":"Succulent",
-  "Pachypodium":"Succulent","Pachysedum":"Succulent","Pachyveria":"Succulent","Parodia":"Succulent",
-  "Pelargonium":"Succulent","Peperomia":"Succulent","Plectranthus":"Succulent","Pleiospilos":"Succulent",
-  "Polaskia":"Succulent","Portulaca":"Succulent","Portulacaria":"Succulent","Rebutia":"Succulent",
-  "Rhipsalis":"Succulent","Rhombophyllum":"Succulent","Ruschia":"Succulent","Schlumbergera":"Succulent",
-  "Sedeveria":"Succulent","Sedum":"Succulent","Semponium":"Succulent","Sempervivum":"Succulent",
-  "Senecio":"Succulent","Sinocrassula":"Succulent","Stapelia":"Succulent","Stenocactus":"Succulent",
-  "Tephrocactus":"Succulent","Thelocactus":"Succulent","Titanopsis":"Succulent","Tradescantia":"Succulent",
-  "Trichodiadema":"Succulent","Tylecodon":"Succulent","Xerosicyos":"Succulent","Yucca":"Succulent",
-  "Aichryson":"Succulent","Callisia":"Succulent","Delosperma":"Succulent","Consolea":"Succulent",
-  "Acanthocereus":"Succulent","Cereus":"Succulent",
-  // Houseplants
-  "Aglaonema":"Houseplant","Alocasia":"Houseplant","Amydrium":"Houseplant","Anthurium":"Houseplant",
-  "Aphelandra":"Houseplant","Apoballis":"Houseplant","Aralia":"Houseplant","Araucaria":"Houseplant",
-  "Ardisia":"Houseplant","Asparagus":"Houseplant","Aspidistra":"Houseplant","Asplenium":"Houseplant",
-  "Adiantum":"Houseplant","Beaucarnea":"Houseplant","Begonia":"Houseplant","Calathea":"Houseplant",
-  "Calliandra":"Houseplant","Chamaedorea":"Houseplant","Chlorophytum":"Houseplant","Codiaeum":"Houseplant",
-  "Coffea":"Houseplant","Cordyline":"Houseplant","Ctenanthe":"Houseplant","Cupressus":"Houseplant",
-  "Cycas":"Houseplant","Davallia":"Houseplant","Dieffenbachia":"Houseplant","Dracaena":"Houseplant",
-  "Dypsis":"Houseplant","Epipremnum":"Houseplant","Farfugium":"Houseplant","Fatsia":"Houseplant",
-  "Ficus":"Houseplant","Fittonia":"Houseplant","Geogenanthus":"Houseplant","Gerbera":"Houseplant",
-  "Goeppertia":"Houseplant","Hedera":"Houseplant","Hesperaloe":"Houseplant","Homalomena":"Houseplant",
-  "Hypoestes":"Houseplant","Juniperus":"Houseplant","Ludisia":"Houseplant","Maranta":"Houseplant",
-  "Microsorum":"Houseplant","Monstera":"Houseplant","Neanthe":"Houseplant","Nematanthus":"Houseplant",
-  "Neoregelia":"Houseplant","Nephrolepis":"Houseplant","Olea":"Houseplant","Pachira":"Houseplant",
-  "Pellaea":"Houseplant","Pellionia":"Houseplant","Phalaenopsis":"Houseplant","Phlebodium":"Houseplant",
-  "Philodendron":"Houseplant","Pilea":"Houseplant","Platycerium":"Houseplant","Pleomele":"Houseplant",
-  "Polyscias":"Houseplant","Polystichum":"Houseplant","Pothos":"Houseplant","Pteris":"Houseplant",
-  "Rhaphidophora":"Houseplant","Saintpaulia":"Houseplant","Sansevieria":"Houseplant","Saxifraga":"Houseplant",
-  "Schefflera":"Houseplant","Scindapsus":"Houseplant","Selaginella":"Houseplant","Soleirolia":"Houseplant",
-  "Spathiphyllum":"Houseplant","Strelitzia":"Houseplant","Stromanthe":"Houseplant","Syngonium":"Houseplant",
-  "Tillandsia":"Air Plant","Zamia":"Houseplant","Zamioculcas":"Houseplant","Zantedeschia":"Houseplant",
-  "Aeschynanthus":"Houseplant","Coleus":"Houseplant","Aechmea":"Houseplant","Guzmania":"Houseplant",
-  "Vriesea":"Houseplant","Cryptanthus":"Houseplant","Cyclamen":"Houseplant","Cussonia":"Houseplant"
+"Adenia":"Succulent","Adenium":"Succulent","Adromischus":"Succulent","Aeonium":"Succulent","Agave":"Succulent","Albuca":"Succulent","Aloe":"Succulent","Aloinopsis":"Succulent","Anacampseros":"Succulent","Argyroderma":"Succulent","Astrophytum":"Succulent","Austrocylindropuntia":"Succulent","Ceropegia":"Succulent","Cleistocactus":"Succulent","Corpuscularia":"Succulent","Cotyledon":"Succulent","Crassula":"Succulent","Cremnosedum":"Succulent","Curio":"Succulent","Echeveria":"Succulent","Echinocactus":"Succulent","Echinocereus":"Succulent","Echinopsis":"Succulent","Edithcolea":"Succulent","Epiphyllum":"Succulent","Espostoa":"Succulent","Euphorbia":"Succulent","Faucaria":"Succulent","Fenestraria":"Succulent","Ferocactus":"Succulent","Gasteraloe":"Succulent","Gasteria":"Succulent","Graptopetalum":"Succulent","Graptosedum":"Succulent","Graptoveria":"Succulent","Greenovia":"Succulent","Gymnocalycium":"Succulent","Hatiora":"Succulent","Haworthia":"Succulent","Haworthiopsis":"Succulent","Hoya":"Succulent","Huernia":"Succulent","Kalanchoe":"Succulent","Lapidaria":"Succulent","Ledebouria":"Succulent","Lepismium":"Succulent","Lithops":"Succulent","Mammillaria":"Succulent","Mammilloydia":"Succulent","Mangave":"Succulent","Myrtillocactus":"Succulent","Notocactus":"Succulent","Opuntia":"Succulent","Orostachys":"Succulent","Oscularia":"Succulent","Othonna":"Succulent","Pachycereus":"Succulent","Pachyphytum":"Succulent","Pachypodium":"Succulent","Pachysedum":"Succulent","Pachyveria":"Succulent","Parodia":"Succulent","Pelargonium":"Succulent","Peperomia":"Succulent","Plectranthus":"Succulent","Pleiospilos":"Succulent","Polaskia":"Succulent","Portulaca":"Succulent","Portulacaria":"Succulent","Rebutia":"Succulent","Rhipsalis":"Succulent","Rhombophyllum":"Succulent","Ruschia":"Succulent","Schlumbergera":"Succulent","Sedeveria":"Succulent","Sedum":"Succulent","Semponium":"Succulent","Sempervivum":"Succulent","Senecio":"Succulent","Sinocrassula":"Succulent","Stapelia":"Succulent","Stenocactus":"Succulent","Tephrocactus":"Succulent","Thelocactus":"Succulent","Titanopsis":"Succulent","Tradescantia":"Succulent","Trichodiadema":"Succulent","Tylecodon":"Succulent","Xerosicyos":"Succulent","Yucca":"Succulent","Aichryson":"Succulent","Callisia":"Succulent","Delosperma":"Succulent","Consolea":"Succulent","Acanthocereus":"Succulent","Cereus":"Succulent",
+"Aglaonema":"Houseplant","Alocasia":"Houseplant","Amydrium":"Houseplant","Anthurium":"Houseplant","Aphelandra":"Houseplant","Apoballis":"Houseplant","Aralia":"Houseplant","Araucaria":"Houseplant","Ardisia":"Houseplant","Asparagus":"Houseplant","Aspidistra":"Houseplant","Asplenium":"Houseplant","Adiantum":"Houseplant","Beaucarnea":"Houseplant","Begonia":"Houseplant","Calathea":"Houseplant","Calliandra":"Houseplant","Chamaedorea":"Houseplant","Chlorophytum":"Houseplant","Codiaeum":"Houseplant","Coffea":"Houseplant","Cordyline":"Houseplant","Ctenanthe":"Houseplant","Cupressus":"Houseplant","Cycas":"Houseplant","Davallia":"Houseplant","Dieffenbachia":"Houseplant","Dracaena":"Houseplant","Dypsis":"Houseplant","Epipremnum":"Houseplant","Farfugium":"Houseplant","Fatsia":"Houseplant","Ficus":"Houseplant","Fittonia":"Houseplant","Geogenanthus":"Houseplant","Gerbera":"Houseplant","Goeppertia":"Houseplant","Hedera":"Houseplant","Hesperaloe":"Houseplant","Homalomena":"Houseplant","Hypoestes":"Houseplant","Juniperus":"Houseplant","Ludisia":"Houseplant","Maranta":"Houseplant","Microsorum":"Houseplant","Monstera":"Houseplant","Neanthe":"Houseplant","Nematanthus":"Houseplant","Neoregelia":"Houseplant","Nephrolepis":"Houseplant","Olea":"Houseplant","Pachira":"Houseplant","Pellaea":"Houseplant","Pellionia":"Houseplant","Phalaenopsis":"Houseplant","Phlebodium":"Houseplant","Philodendron":"Houseplant","Pilea":"Houseplant","Platycerium":"Houseplant","Pleomele":"Houseplant","Polyscias":"Houseplant","Polystichum":"Houseplant","Pothos":"Houseplant","Pteris":"Houseplant","Rhaphidophora":"Houseplant","Saintpaulia":"Houseplant","Sansevieria":"Houseplant","Saxifraga":"Houseplant","Schefflera":"Houseplant","Scindapsus":"Houseplant","Selaginella":"Houseplant","Soleirolia":"Houseplant","Spathiphyllum":"Houseplant","Strelitzia":"Houseplant","Stromanthe":"Houseplant","Syngonium":"Houseplant","Zamia":"Houseplant","Zamioculcas":"Houseplant","Zantedeschia":"Houseplant","Aeschynanthus":"Houseplant","Coleus":"Houseplant","Aechmea":"Houseplant","Guzmania":"Houseplant","Vriesea":"Houseplant","Cryptanthus":"Houseplant","Cyclamen":"Houseplant","Cussonia":"Houseplant",
+"Tillandsia":"Air Plant"
 };
 function getType(genus){
   if (!genus || genus === "(no genus)") return "";
   return GENUS_TYPE[genus] || "";
 }
-
 function detectNonPlantType(title){
   if (!title) return "";
   var t = String(title).toLowerCase();
@@ -94,7 +45,6 @@ function detectNonPlantType(title){
   if (/\b(card|coloring|bookmark|calendar|printable|chart)\b/.test(t)) return "Merchandise";
   return "Other";
 }
-
 function getItemType(genus, title){
   var pt = getType(genus);
   if (pt) return pt;

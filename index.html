@@ -65,6 +65,9 @@
   .badge.type-subscription, .badge.type-giftcard, .badge.type-merchandise{background:#f3e5f5;color:#6a1b9a}
   .badge.type-bundle, .badge.type-mysterybox, .badge.type-cutting{background:#fff3e0;color:#e65100}
   .badge.type-other{background:#f5f5f5;color:#666}
+  .badge.restricted{background:#ffebee;color:#c62828;border:1px solid #c62828}
+  tr.restricted-row{background:#fff8e1}
+  tr.restricted-row:hover{background:#fff3d6}
   .badge.external{background:#fff3e0;color:#e65100}
   .badge.owned{background:#e8f5e9;color:var(--up)}
   .badge.sig-red{background:#ffebee;color:#c62828}
@@ -465,6 +468,7 @@
           <button class="tab" data-ovm-plant-filter="missing">Missing from yours</button>
           <button class="tab" data-ovm-plant-filter="both">You sell too</button>
           <button class="tab" data-ovm-plant-filter="nonplant">Non-plant only</button>
+          <button class="tab" data-ovm-plant-filter="restricted" title="MCG products Succulents Box cannot sell (from exclusion list)">🚫 Can&#39;t sell only</button>
           <span class="small" style="margin-left:6px">Min units:</span>
           <button class="tab" data-ovm-plant-thresh="5">&ge; 5</button>
           <button class="tab active" data-ovm-plant-thresh="10">&ge; 10</button>
@@ -538,6 +542,7 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
 <script src="genus-data.js"></script>
+<script src="exclusions.js"></script>
 <script src="app.js"></script>
 
 </body>
