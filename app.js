@@ -1833,6 +1833,8 @@ state.oppmap   = { amazonId: null, shopifyId: null, externalId: null,
 state.ovm      = { plantFilter: 'all', plantThreshold: 10,
                    crossPlantFilter: 'all',
                    drillGenus: null,
+                   plantSort: {col: 4, dir: 'desc'},
+                   crossPlantSort: {col: 5, dir: 'desc'},
                    amazonId: null, shopifyId: null, externalId: null,
                    storeFilter: 'all', storeGroupByParent: true,
                    rowFilter: 'all', sort: {col: 4, dir: 'desc'}, chart: null };
@@ -2855,21 +2857,57 @@ function normPlantTitle(t) {
   return s;
 }
 
+// Return every match-key a title should be indexed under so cross-channel titles
+// with different formats can still be recognized as the same plant.
+// e.g. "Senecio rowleyanus - String of Pearls" and "String of Pearls (2 Pot)" match.
+function getMatchKeys(title) {
+  var keys = [];
+  if (!title) return keys;
+  var full = normPlantTitle(title);
+  if (full) keys.push(full);
+  var low = String(title).toLowerCase();
+  // Distinctive quoted variety: e.g. 'Perle Von Nurnberg'
+  var mQuote = title.match(/[‘’'"`]([^‘’'"`]{3,50})[‘’'"`]/);
+  if (mQuote) {
+    var q = mQuote[1].toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+    if (q.length >= 3) keys.push(q);
+  }
+  // Common names from COMMON_NAMES table (String of Pearls, Snake Plant, etc.)
+  if (typeof COMMON_NAMES !== "undefined") {
+    for (var i = 0; i < COMMON_NAMES.length; i++) {
+      var phrase = COMMON_NAMES[i][0];
+      if (phrase && phrase.length >= 4 && low.indexOf(phrase.toLowerCase()) >= 0) {
+        keys.push(phrase.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim());
+      }
+    }
+  }
+  // Last dash-separated segment (often the marketable name): "Senecio rowleyanus - String of Pearls" -> "string of pearls"
+  var parts = title.split(/\s*[-–—]\s*/);
+  if (parts.length > 1) {
+    var lastSeg = normPlantTitle(parts[parts.length - 1]);
+    if (lastSeg && lastSeg.length >= 4 && keys.indexOf(lastSeg) < 0) keys.push(lastSeg);
+  }
+  return keys;
+}
+
 // Build an index of Owned plant titles for fast lookup
 function buildOwnedTitleIndex() {
   var s = state.oppmap;
-  var owned = new Map(); // normalized title -> {sources:{amazon,shopify}, titles:[...], rev, units}
+  var owned = new Map(); // any-match-key -> {sources, titles, rev, units}
   function add(products, channel) {
     for (var i = 0; i < products.length; i++) {
       var p = products[i];
-      var key = normPlantTitle(p.title);
-      if (!key || key.length < 3) continue;
-      if (!owned.has(key)) owned.set(key, {sources:{}, titles:[], rev:0, units:0});
-      var rec = owned.get(key);
-      rec.sources[channel] = true;
-      if (rec.titles.indexOf(p.title) < 0 && rec.titles.length < 3) rec.titles.push(p.title);
-      rec.rev += (p.rev || 0);
-      rec.units += (p.units || 0);
+      var keys = getMatchKeys(p.title);
+      for (var k = 0; k < keys.length; k++) {
+        var key = keys[k];
+        if (!key || key.length < 3) continue;
+        if (!owned.has(key)) owned.set(key, {sources:{}, titles:[], rev:0, units:0});
+        var rec = owned.get(key);
+        rec.sources[channel] = true;
+        if (rec.titles.indexOf(p.title) < 0 && rec.titles.length < 3) rec.titles.push(p.title);
+        // Only count rev/units once per product (against first key)
+        if (k === 0) { rec.rev += (p.rev || 0); rec.units += (p.units || 0); }
+      }
     }
   }
   var am = s.amazonId ? snapshots.find(function(x){return x.id===s.amazonId;}) : null;
@@ -3113,7 +3151,21 @@ function renderOvmPlantPanel() {
     return typeof isRestricted === "function" && isRestricted(r.sku, r.title);
   });
   if (search) filtered = filtered.filter(function(r){return (r.title||"").toLowerCase().indexOf(search)>=0 || (r.sku||"").toLowerCase().indexOf(search)>=0;});
-  filtered.sort(function(a, b){return b.mktUnits - a.mktUnits;});
+  // Sort per user selection (default col 4 = Mkt units, desc)
+  var _ovmPS = s.plantSort || {col: 4, dir: 'desc'};
+  var _ovmCols = [
+    {k:"title"},{k:"sku"},{k:"genus"},{k:"type"},
+    {k:"mktUnits"},{k:"mktRev"},{k:"status"},{k:"yourUnits"},{k:"yourRev"}
+  ];
+  var _ovmSortKey = _ovmCols[_ovmPS.col].k;
+  filtered.sort(function(a, b){
+    var av = a[_ovmSortKey], bv = b[_ovmSortKey];
+    var dir = _ovmPS.dir === 'asc' ? 1 : -1;
+    if (typeof av === 'string' || typeof bv === 'string') {
+      return String(av||'').localeCompare(String(bv||'')) * dir;
+    }
+    return ((av||0) > (bv||0) ? 1 : (av||0) < (bv||0) ? -1 : 0) * dir;
+  });
   // Reflect drill state in the count pill
   var pillEl = document.getElementById("ovm-plant-count");
   if (drill) {
@@ -3138,7 +3190,10 @@ function renderOvmPlantPanel() {
     {label: "Your units", k: "yourUnits", num: true, fmt: fmtN},
     {label: "Your rev", k: "yourRev", num: true, fmt: fmt$}
   ];
-  thead.innerHTML = cols.map(function(c){return '<th class="' + (c.num?"num":"") + '">' + c.label + '</th>';}).join("");
+  thead.innerHTML = cols.map(function(c, i){
+    var arrow = i === _ovmPS.col ? (_ovmPS.dir === 'asc' ? ' ▲' : ' ▼') : '';
+    return '<th class="' + (c.num?"num":"") + '" data-ovm-plant-sort="' + i + '">' + c.label + arrow + '</th>';
+  }).join("");
   tbody.innerHTML = filtered.slice(0, 500).map(function(r){
     var typeBadge = r.type ? '<span class="badge type-' + r.type.toLowerCase().replace(/[\s\/]/g,"") + '">' + r.type + '</span>' : "";
     var restricted = (typeof isRestricted === "function") && isRestricted(r.sku, r.title);
@@ -3157,6 +3212,16 @@ function renderOvmPlantPanel() {
       return '<td class="' + (c.num?"num":"") + '">' + (c.fmt ? c.fmt(r[c.k] || 0) : (r[c.k] || "")) + '</td>';
     }).join("") + "</tr>";
   }).join("");
+  // Wire header clicks for sort toggle
+  thead.querySelectorAll("[data-ovm-plant-sort]").forEach(function(th){
+    th.addEventListener("click", function(){
+      var idx = +th.dataset.ovmPlantSort;
+      if (_ovmPS.col === idx) _ovmPS.dir = _ovmPS.dir === 'asc' ? 'desc' : 'asc';
+      else { _ovmPS.col = idx; _ovmPS.dir = 'desc'; }
+      s.plantSort = _ovmPS;
+      renderOvmPlantPanel();
+    });
+  });
   // Only set plain count text if drill isn't active (drill already renders its own pill with Clear button)
   if (!drill) count.textContent = filtered.length + " items";
 }
@@ -3218,8 +3283,6 @@ function renderCrossPlantPanel() {
   else if (s.crossPlantFilter === "both") filtered = filtered.filter(function(r){return r.status === "both";});
   else if (s.crossPlantFilter === "nonplant") filtered = filtered.filter(function(r){return !r.isPlant;});
   if (search) filtered = filtered.filter(function(r){return (r.title||"").toLowerCase().indexOf(search)>=0 || (r.sku||"").toLowerCase().indexOf(search)>=0;});
-  filtered.sort(function(a, b){return (b.amazonRev + b.shopifyRev) - (a.amazonRev + a.shopifyRev);});
-
   var cols = [
     {label: "Plant / Item", k: "title"},
     {label: "SKU / ASIN", k: "sku"},
@@ -3231,7 +3294,20 @@ function renderCrossPlantPanel() {
     {label: "Shopify rev", k: "shopifyRev", num: true, fmt: fmt$},
     {label: "Preference", k: "status"}
   ];
-  thead.innerHTML = cols.map(function(c){return '<th class="' + (c.num?"num":"") + '">' + c.label + '</th>';}).join("");
+  var _cPS = s.crossPlantSort || {col: 5, dir: 'desc'};
+  var _cSortKey = cols[_cPS.col].k;
+  filtered.sort(function(a, b){
+    var av = a[_cSortKey], bv = b[_cSortKey];
+    var dir = _cPS.dir === 'asc' ? 1 : -1;
+    if (typeof av === 'string' || typeof bv === 'string') {
+      return String(av||'').localeCompare(String(bv||'')) * dir;
+    }
+    return ((av||0) > (bv||0) ? 1 : (av||0) < (bv||0) ? -1 : 0) * dir;
+  });
+  thead.innerHTML = cols.map(function(c, i){
+    var arrow = i === _cPS.col ? (_cPS.dir === 'asc' ? ' ▲' : ' ▼') : '';
+    return '<th class="' + (c.num?"num":"") + '" data-cross-plant-sort="' + i + '">' + c.label + arrow + '</th>';
+  }).join("");
   tbody.innerHTML = filtered.slice(0, 500).map(function(r){
     var typeBadge = r.type ? '<span class="badge type-' + r.type.toLowerCase().replace(/[\s\/]/g,"") + '">' + r.type + '</span>' : "";
     var prefBadge;
@@ -3241,8 +3317,18 @@ function renderCrossPlantPanel() {
     return "<tr>" + cols.map(function(c){
       if (c.k === "type") return "<td>" + typeBadge + "</td>";
       if (c.k === "status") return "<td>" + prefBadge + "</td>";
+      return '<td class="' + (c.num?"num":"") + '">' + (c.fmt ? c.fmt(r[c.k] || 0) : (r[c.k] || "")) + '</td>';
     }).join("") + "</tr>";
   }).join("");
+  thead.querySelectorAll("[data-cross-plant-sort]").forEach(function(th){
+    th.addEventListener("click", function(){
+      var idx = +th.dataset.crossPlantSort;
+      if (_cPS.col === idx) _cPS.dir = _cPS.dir === 'asc' ? 'desc' : 'asc';
+      else { _cPS.col = idx; _cPS.dir = 'desc'; }
+      s.crossPlantSort = _cPS;
+      renderCrossPlantPanel();
+    });
+  });
   count.textContent = filtered.length + " items";
 }
 
