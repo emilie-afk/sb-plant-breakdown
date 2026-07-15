@@ -1,3 +1,4 @@
+// inline.js — version 2026-07-15-b (adds SB_MCG_PASSWORD injection)
 const fs = require('fs');
 const out = process.argv[2];
 let html = fs.readFileSync('index.html', 'utf8');
@@ -12,7 +13,6 @@ html = html.replace(
 html = html.replace('<script src="genus-data.js"></script>', () => '<script>' + gd + '</script>');
 html = html.replace('<script src="exclusions.js"></script>', () => '<script>' + exc + '</script>');
 html = html.replace('<script src="app.js"></script>', () => '<script>' + app + '</script>');
-// Inject SB_MCG_PASSWORD from Netlify env var (empty string if not set — feature just stays disabled)
 const mcgPwd = process.env.SB_MCG_PASSWORD || '';
 html = html.replace('__SB_MCG_PASSWORD__', () => mcgPwd);
 if (html.includes('__SB_MCG_PASSWORD__')) {
@@ -29,4 +29,4 @@ if (!html.includes('function detectGenus') || !html.includes('manage-btn') || !h
   process.exit(1);
 }
 fs.writeFileSync(out, html);
-console.log('  Inlined size:', html.length, 'bytes (verified)');
+console.log('  Inlined size:', html.length, 'bytes (v2026-07-15-b, MCG password injection verified)');
