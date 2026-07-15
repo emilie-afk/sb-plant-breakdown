@@ -1834,6 +1834,7 @@ document.addEventListener('DOMContentLoaded', () => {
     b.addEventListener('click', () => switchTab(b.dataset.tab)));
   setupDropzone('amazon'); setupDropzone('shopify'); setupDropzone('external');
   setupExternalHandlers(); setupOppMapHandlers(); setupOwnedVsMarketHandlers(); setupPlantOppHandlers(); setupExtraSkuHandlers();
+  if (typeof setupMcgHandlers === "function") setupMcgHandlers();
   if (typeof mcgAutoLoad === "function") mcgAutoLoad();
   for (const src of ['amazon','shopify']) {
     document.getElementById(`${src}-snap-select`).addEventListener('change', e => {
@@ -3298,20 +3299,20 @@ function renderOvmPlantPanel() {
     var arrow = i === _ovmPS.col ? (_ovmPS.dir === 'asc' ? ' ▲' : ' ▼') : '';
     return '<th class="' + (c.num?"num":"") + '" data-ovm-plant-sort="' + i + '">' + c.label + arrow + '</th>';
   }).join("");
-  var mcgLU = (typeof mcgSkuLookup === "function") ? mcgSkuLookup() : {};
   tbody.innerHTML = filtered.slice(0, 500).map(function(r){
     var typeBadge = r.type ? '<span class="badge type-' + r.type.toLowerCase().replace(/[\s\/]/g,"") + '">' + r.type + '</span>' : "";
     var restricted = (typeof isRestricted === "function") && isRestricted(r.sku, r.title);
-    var mcgHit = r.sku ? mcgLU[String(r.sku).toUpperCase().trim()] : null;
+    var mcgHit = (typeof mcgFindMatch === "function") ? mcgFindMatch(r.sku, r.title) : null;
     var statusBadge;
+    var mismatchTag = (mcgHit && mcgHit.skuMismatch) ? ' <span class="badge sig-yellow" title="Title matches but SKUs differ (your ' + (mcgHit.yourSku || "?") + ' vs MCG ' + (mcgHit.theirSku || "?") + ') — possible duplicate SKU / variant confusion">⚠ SKU mismatch</span>' : '';
     if (restricted) {
       statusBadge = '<span class="badge restricted" title="On MCG exclusion list — you cannot sell this">🚫 can\'t sell</span>';
     } else if (r.status !== "missing") {
-      statusBadge = '<span class="badge sig-green">🟢 sold on ' + (r.yourSources || "yes") + '</span>';
+      statusBadge = '<span class="badge sig-green">🟢 sold on ' + (r.yourSources || "yes") + '</span>' + mismatchTag;
     } else if (mcgHit && mcgHit.status === "sbOos") {
-      statusBadge = '<span class="badge sig-orange" title="You carry this but SB is out of stock — turn on!">🟠 SB OOS — turn on</span>';
+      statusBadge = '<span class="badge sig-orange" title="You carry this but SB is out of stock — turn on!">🟠 SB OOS — turn on</span>' + mismatchTag;
     } else if (mcgHit && mcgHit.status === "mcgOnly") {
-      statusBadge = '<span class="badge sig-red">🔴 not carried by SB</span>';
+      statusBadge = '<span class="badge sig-red">🔴 not carried by SB</span>' + mismatchTag;
     } else {
       statusBadge = '<span class="badge sig-red">🔴 not found</span>';
     }
@@ -3575,20 +3576,93 @@ function mcgSkuLookup() {
   return lu;
 }
 
-// Kick off a background fetch on load if password is baked in
-function mcgAutoLoad() {
-  var cached = mcgLoadCache();
-  if (cached) {
-    MCG_STATE.data = cached.data;
-    MCG_STATE.fetchedAt = cached.fetchedAt;
-    // Also refresh in background if cache is >30min old
-    if (Date.now() - cached.fetchedAt > 30 * 60 * 1000) {
-      mcgFetch(false).then(function(){ if (typeof renderTab === "function") renderTab(activeTab); });
+// Fallback lookup by normalized title (covers SKU-variant mismatches like
+// "Frizzle Sizzle" S2KY2965 vs "Frizzle Sizzle [dormant]" S2KY5477).
+// Uses the same normPlantTitle + getMatchKeys as the OVM matcher.
+function mcgTitleLookup() {
+  var lu = {};
+  if (!MCG_STATE.data || typeof getMatchKeys !== "function") return lu;
+  var add = function(x, status) {
+    if (!x.name) return;
+    var keys = getMatchKeys(x.name);
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      if (k && k.length >= 4 && !lu[k]) lu[k] = {status: status, name: x.name, url: x.url, sku: x.sku};
     }
-    return;
+  };
+  (MCG_STATE.data.sbOos || []).forEach(function(x) { add(x, "sbOos"); });
+  (MCG_STATE.data.mcgOnly || []).forEach(function(x) { add(x, "mcgOnly"); });
+  return lu;
+}
+
+// Combined lookup: try SKU first, then title fallback.
+// Adds skuMismatch:true when title matches but SKUs differ (variant mix-up flag).
+function mcgFindMatch(sku, title) {
+  if (!MCG_STATE.data) return null;
+  var skuLU = mcgSkuLookup();
+  var s = String(sku || "").toUpperCase().trim();
+  if (s) {
+    if (skuLU[s]) return skuLU[s]; // exact SKU match
+    if (s.length >= 8) {
+      for (var k in skuLU) if (k.slice(0,8) === s.slice(0,8)) return skuLU[k];
+    }
   }
+  if (title && typeof getMatchKeys === "function") {
+    var titleLU = mcgTitleLookup();
+    var keys = getMatchKeys(title);
+    for (var i = 0; i < keys.length; i++) {
+      var hit = titleLU[keys[i]];
+      if (hit) {
+        // Title match — check if SKUs differ (variant/duplicate)
+        var hitSku = String(hit.sku || "").toUpperCase().trim();
+        if (s && hitSku && s !== hitSku && s.slice(0,8) !== hitSku.slice(0,8)) {
+          return Object.assign({}, hit, {skuMismatch: true, yourSku: sku, theirSku: hit.sku});
+        }
+        return hit;
+      }
+    }
+  }
+  return null;
+}
+
+// Kick off a background fetch on load if password is bak
+// ============================================================
+// MCG Tracker UI — refresh button + status pill
+// ============================================================
+function renderMcgStatus() {
+  var el = document.getElementById("ovm-mcg-status");
+  if (!el) return;
   var cfg = mcgConfig();
-  if (cfg.password) {
-    mcgFetch(false).then(function(){ if (typeof renderTab === "function") renderTab(activeTab); });
+  if (!cfg.password) { el.innerHTML = 'MCG Tracker: no password (set SB_MCG_PASSWORD in Netlify)'; return; }
+  if (MCG_STATE.loading) { el.innerHTML = 'MCG Tracker: loading...'; return; }
+  if (MCG_STATE.error) { el.innerHTML = 'MCG Tracker error: ' + MCG_STATE.error; return; }
+  if (MCG_STATE.data) {
+    var m = (MCG_STATE.data.mcgOnly || []).length;
+    var o = (MCG_STATE.data.sbOos || []).length;
+    var age = Math.round((Date.now() - MCG_STATE.fetchedAt) / 60000);
+    el.innerHTML = 'MCG Tracker: ' + o + ' SB OOS, ' + m + ' not in SB (' + age + 'min ago)';
+  } else {
+    el.innerHTML = 'MCG Tracker: click button to load';
   }
 }
+function setupMcgHandlers() {
+  var btn = document.getElementById("ovm-mcg-refresh");
+  if (!btn) return;
+  btn.addEventListener("click", async function() {
+    renderMcgStatus();
+    await mcgFetch(true);
+    renderMcgStatus();
+    if (typeof renderTab === "function") renderTab(activeTab);
+  });
+  renderMcgStatus();
+}
+(function(){
+  var orig = window.renderOwnedVsMarket;
+  if (typeof orig === "function") {
+    window.renderOwnedVsMarket = function() {
+      var r = orig.apply(this, arguments);
+      renderMcgStatus();
+      return r;
+    };
+  }
+})();
