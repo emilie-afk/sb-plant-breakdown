@@ -106,10 +106,31 @@ async function readFile(file){
   return XLSX.read(buf);
 }
 function parseDates(name){
-  const m = name.match(/(\d{4}-\d{2}-\d{2})/g);
-  if (!m) return [null, null];
-  if (m.length >= 2) return [m[0], m[m.length-1]];
-  return [m[0], m[0]];
+  // ISO format first: YYYY-MM-DD
+  const iso = name.match(/(\d{4}-\d{2}-\d{2})/g);
+  if (iso) {
+    if (iso.length >= 2) return [iso[0], iso[iso.length-1]];
+    return [iso[0], iso[0]];
+  }
+  // Month-name format: "Jun 1-30", "Jun 1 -30", "Jun 1 - 30", "Jun 1-Jun 30", "Jun 1-Jul 15"
+  // Also handles "May 1-31 2026" or "Jun 1-30 2026"
+  const monthMap = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+  const pad = n => String(n).padStart(2, '0');
+  // Try: MonthName D[-|to] [MonthName] D [YYYY]
+  const m2 = name.match(/(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s*(\d{1,2})\s*(?:-|to|–|—)\s*(?:(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s*)?(\d{1,2})(?:[,\s]+(\d{4}))?/i);
+  if (m2) {
+    const sMonth = monthMap[m2[1].toLowerCase().slice(0,3)];
+    const sDay = parseInt(m2[2], 10);
+    const eMonth = m2[3] ? monthMap[m2[3].toLowerCase().slice(0,3)] : sMonth;
+    const eDay = parseInt(m2[4], 10);
+    const year = m2[5] ? parseInt(m2[5], 10) : new Date().getFullYear();
+    return [`${year}-${pad(sMonth)}-${pad(sDay)}`, `${year}-${pad(eMonth)}-${pad(eDay)}`];
+  }
+  return [null, null];
+}
+// Format a JS Date as local YYYY-MM-DD (never UTC — avoids the "last month starts May 31" bug)
+function toLocalYMD(d){
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
 }
 function labelFromDates(start, end){
   if (!start) return "unknown period";
@@ -268,7 +289,7 @@ async function handleFile(source, file){
 function promptForPeriod(source, filename, defaults){
   // Modal-style prompt for start/end dates. Returns {start, end} or null.
   return new Promise(resolve => {
-    const today = new Date().toISOString().slice(0,10);
+    const today = toLocalYMD(new Date());
     const yearStart = today.slice(0,4) + '-01-01';
     const defStart = (defaults && defaults.start) || yearStart;
     const defEnd   = (defaults && defaults.end)   || today;
@@ -313,7 +334,7 @@ function promptForPeriod(source, filename, defaults){
     modal.querySelectorAll('[data-preset]').forEach(a => a.onclick = ev => {
       ev.preventDefault();
       const t = new Date();
-      const today = t.toISOString().slice(0,10);
+      const today = toLocalYMD(t);
       const y = t.getFullYear();
       const m = t.getMonth();
       let s, e;
@@ -321,9 +342,10 @@ function promptForPeriod(source, filename, defaults){
       else if (a.dataset.preset === 'month') {
         s = `${y}-${String(m+1).padStart(2,'0')}-01`; e = today;
       } else if (a.dataset.preset === 'lastmonth') {
+        // Use local Date arithmetic then format as local YMD to avoid UTC offset shifting the day
         const lm = new Date(y, m-1, 1);
         const lme = new Date(y, m, 0);
-        s = lm.toISOString().slice(0,10); e = lme.toISOString().slice(0,10);
+        s = toLocalYMD(lm); e = toLocalYMD(lme);
       } else if (a.dataset.preset === 'lastyear') {
         s = `${y-1}-01-01`; e = `${y-1}-12-31`;
       }
