@@ -90,7 +90,11 @@ function deleteSnapshot(id){
   saveSnapshots();
 }
 function snapshotsFor(source){
-  return snapshots.filter(s => s.source === source).sort((a,b) => b.endDate.localeCompare(a.endDate));
+  // Catalog snapshots are excluded from period pickers (they're always-on lookups, not periods).
+  return snapshots.filter(s => s.source === source && !s.isCatalog).sort((a,b) => b.endDate.localeCompare(a.endDate));
+}
+function catalogSnapshots(){
+  return snapshots.filter(s => s.isCatalog);
 }
 
 // ============================================================
@@ -245,6 +249,64 @@ function parseShopify(rows){
   return products;
 }
 
+// Detect if the rows look like a Shopify products.csv catalog export (not a sales report).
+// Catalog format has "Handle", "Title", "Variant SKU", "Variant Inventory Qty" columns.
+function isShopifyCatalog(rows){
+  if (!rows || !rows.length) return false;
+  const header = rows[0].map(x => String(x || '').toLowerCase().trim());
+  return header.includes('handle') && header.includes('title') &&
+         (header.includes('variant sku') || header.includes('variant inventory qty'));
+}
+
+// Parse Shopify products.csv (catalog). One row per variant.
+// Emits one product per unique (title, sku) pair with units=0 and rev=0
+// (this is inventory, not sales). Marks each product with catalogOnly:true and inventory qty.
+function parseShopifyCatalog(rows){
+  const header = rows[0].map(x => String(x || '').trim());
+  const idx = {}; header.forEach((h,i) => { idx[h.toLowerCase()] = i; });
+  const col = names => { for (const n of names) if (n.toLowerCase() in idx) return idx[n.toLowerCase()]; return -1; };
+  const iTitle = col(['Title']);
+  const iSKU = col(['Variant SKU', 'SKU']);
+  const iInv = col(['Variant Inventory Qty', 'Inventory Qty']);
+  const iPub = col(['Published']);
+  const iStatus = col(['Status']);
+  const iHandle = col(['Handle']);
+  const num = x => { const n = parseFloat(String(x||'').replace(/[,\s]/g,'')); return isNaN(n) ? 0 : n; };
+  const seen = new Set();
+  const products = [];
+  let lastTitle = '';
+  for (let i = 1; i < rows.length; i++){
+    const r = rows[i]; if (!r) continue;
+    // Shopify products.csv repeats blank title on variant rows — carry it forward
+    let title = String(r[iTitle] || '').trim();
+    if (!title) title = lastTitle;
+    else lastTitle = title;
+    if (!title) continue;
+    const sku = iSKU >= 0 ? String(r[iSKU] || '').trim() : '';
+    const inv = iInv >= 0 ? num(r[iInv]) : 0;
+    const key = title + '||' + sku;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    // Skip unpublished / draft products
+    if (iPub >= 0) {
+      const p = String(r[iPub]||'').trim().toLowerCase();
+      if (p === 'false' || p === 'no' || p === '0') continue;
+    }
+    if (iStatus >= 0) {
+      const st = String(r[iStatus]||'').trim().toLowerCase();
+      if (st === 'draft' || st === 'archived') continue;
+    }
+    products.push({
+      asin: sku, title,
+      units: 0, rev: 0, avg: 0, glance: 0, conv: 0,
+      inv: inv,
+      catalogOnly: true,
+      genus: detectGenus(title) || "(no genus)"
+    });
+  }
+  return products;
+}
+
 async function handleFile(source, file){
   if (!file) return;
   const dz = document.getElementById(`${source}-dropzone`);
@@ -254,11 +316,38 @@ async function handleFile(source, file){
     const ws = wb.Sheets[wb.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json(ws, {header: 1, raw: true, defval: ""});
     let products;
+    let isCatalog = false;
     if (source === "amazon") products = parseAmazon(rows, ws);
-    else if (source === "shopify") products = parseShopify(rows);
+    else if (source === "shopify") {
+      // Auto-detect Shopify catalog (products.csv) vs sales export
+      if (isShopifyCatalog(rows)) {
+        products = parseShopifyCatalog(rows);
+        isCatalog = true;
+      } else {
+        products = parseShopify(rows);
+      }
+    }
     else if (source === "external") products = parseShipStation(rows);
     else throw new Error("Unknown source: " + source);
     if (!products.length) { alert("No data rows found in file."); return; }
+
+    // Catalog is a permanent lookup — no period needed, keep a single record per source
+    if (isCatalog) {
+      const snap = {
+        id: "catalog_" + source,
+        source: source, label: "Catalog (" + source + ")",
+        startDate: "0000-00-00", endDate: "9999-12-31",
+        fileName: file.name,
+        uploadedAt: new Date().toISOString(),
+        isCatalog: true,
+        products
+      };
+      addSnapshot(snap);
+      alert("Catalog loaded: " + products.length + " listings. This will now be used automatically in Owned vs Market and Opportunity Map to distinguish 'listed but 0 sales' from 'not carried'.");
+      renderTab(activeTab);
+      return;
+    }
+
     let [start, end] = parseDates(file.name);
     if (!start) {
       // Filename doesn't include a date range — prompt the user
@@ -1745,6 +1834,7 @@ document.addEventListener('DOMContentLoaded', () => {
     b.addEventListener('click', () => switchTab(b.dataset.tab)));
   setupDropzone('amazon'); setupDropzone('shopify'); setupDropzone('external');
   setupExternalHandlers(); setupOppMapHandlers(); setupOwnedVsMarketHandlers(); setupPlantOppHandlers(); setupExtraSkuHandlers();
+  if (typeof mcgAutoLoad === "function") mcgAutoLoad();
   for (const src of ['amazon','shopify']) {
     document.getElementById(`${src}-snap-select`).addEventListener('change', e => {
       state[src].snapshotId = e.target.value || null;
@@ -2849,7 +2939,7 @@ function normPlantTitle(t) {
   // Strip content in parentheses/brackets
   s = s.replace(/\([^)]*\)/g, " ").replace(/\[[^\]]*\]/g, " ");
   // Drop common marketing/format noise
-  s = s.replace(/\b(live plant|live plants|in \d+ inch pot|inch pot|inch pots|potted|starter|cutting|cuttings|variety pack|bulk pack|pack|plants|plant|bare root|large|small|mini|xl)\b/g, " ");
+  s = s.replace(/\b(live plant|live plants|in \d+ inch pot|inch pot|inch pots|potted|starter|cutting|cuttings|variety pack|bulk pack|pack|plants|plant|bare root|large|small|mini|xl|succulent|succulents|cactus|cacti|houseplant|houseplants|air plant|airplant|extra large|premium|4 pot|2 pot|4 in|2 in|4\"|2\"|from|the)\b/g, " ");
   // Strip punctuation
   s = s.replace(/[^a-z0-9\s]/g, " ");
   // Collapse whitespace
@@ -2893,27 +2983,34 @@ function getMatchKeys(title) {
 // Build an index of Owned plant titles for fast lookup
 function buildOwnedTitleIndex() {
   var s = state.oppmap;
-  var owned = new Map(); // any-match-key -> {sources, titles, rev, units}
-  function add(products, channel) {
+  var owned = new Map(); // any-match-key -> {sources, titles, rev, units, inCatalog, inv}
+  function add(products, channel, isCat) {
     for (var i = 0; i < products.length; i++) {
       var p = products[i];
       var keys = getMatchKeys(p.title);
       for (var k = 0; k < keys.length; k++) {
         var key = keys[k];
         if (!key || key.length < 3) continue;
-        if (!owned.has(key)) owned.set(key, {sources:{}, titles:[], rev:0, units:0});
+        if (!owned.has(key)) owned.set(key, {sources:{}, titles:[], rev:0, units:0, inCatalog:false, inv:0});
         var rec = owned.get(key);
-        rec.sources[channel] = true;
-        if (rec.titles.indexOf(p.title) < 0 && rec.titles.length < 3) rec.titles.push(p.title);
-        // Only count rev/units once per product (against first key)
-        if (k === 0) { rec.rev += (p.rev || 0); rec.units += (p.units || 0); }
+        if (isCat) {
+          rec.inCatalog = true;
+          rec.inv += (p.inv || 0);
+        } else {
+          rec.sources[channel] = true;
+          if (rec.titles.indexOf(p.title) < 0 && rec.titles.length < 3) rec.titles.push(p.title);
+          if (k === 0) { rec.rev += (p.rev || 0); rec.units += (p.units || 0); }
+        }
       }
     }
   }
   var am = s.amazonId ? snapshots.find(function(x){return x.id===s.amazonId;}) : null;
   var sh = s.shopifyId ? snapshots.find(function(x){return x.id===s.shopifyId;}) : null;
-  if (am) add(am.products, "amazon");
-  if (sh) add(sh.products, "shopify");
+  if (am) add(am.products, "amazon", false);
+  if (sh) add(sh.products, "shopify", false);
+  // Catalog snapshots (always applied, regardless of period)
+  var cats = catalogSnapshots();
+  for (var i = 0; i < cats.length; i++) add(cats[i].products, cats[i].source, true);
   return owned;
 }
 
@@ -3109,6 +3206,12 @@ function computeOvmPlantRows() {
     var match = owned.get(key);
     var isPlant = p.genus && p.genus !== "(no genus)";
     var type = getItemType(p.genus, p.title);
+    var soldMatch = match && (match.units > 0 || match.rev > 0);
+    var catalogMatch = match && match.inCatalog && !soldMatch;
+    var status;
+    if (soldMatch) status = "both";
+    else if (catalogMatch) status = "listed";
+    else status = "missing";
     out.push({
       title: p.title, sku: p.sku,
       genus: isPlant ? p.genus : "—",
@@ -3117,7 +3220,8 @@ function computeOvmPlantRows() {
       yourUnits: match ? match.units : 0,
       yourRev: match ? match.rev : 0,
       yourSources: match ? Object.keys(match.sources).join("+") : "",
-      status: match ? "both" : "missing"
+      yourInv: match ? (match.inv || 0) : 0,
+      status: status
     });
   }
   return out;
@@ -3194,16 +3298,22 @@ function renderOvmPlantPanel() {
     var arrow = i === _ovmPS.col ? (_ovmPS.dir === 'asc' ? ' ▲' : ' ▼') : '';
     return '<th class="' + (c.num?"num":"") + '" data-ovm-plant-sort="' + i + '">' + c.label + arrow + '</th>';
   }).join("");
+  var mcgLU = (typeof mcgSkuLookup === "function") ? mcgSkuLookup() : {};
   tbody.innerHTML = filtered.slice(0, 500).map(function(r){
     var typeBadge = r.type ? '<span class="badge type-' + r.type.toLowerCase().replace(/[\s\/]/g,"") + '">' + r.type + '</span>' : "";
     var restricted = (typeof isRestricted === "function") && isRestricted(r.sku, r.title);
+    var mcgHit = r.sku ? mcgLU[String(r.sku).toUpperCase().trim()] : null;
     var statusBadge;
     if (restricted) {
       statusBadge = '<span class="badge restricted" title="On MCG exclusion list — you cannot sell this">🚫 can\'t sell</span>';
-    } else if (r.status === "missing") {
-      statusBadge = '<span class="badge sig-red">🔴 not found</span>';
+    } else if (r.status !== "missing") {
+      statusBadge = '<span class="badge sig-green">🟢 sold on ' + (r.yourSources || "yes") + '</span>';
+    } else if (mcgHit && mcgHit.status === "sbOos") {
+      statusBadge = '<span class="badge sig-orange" title="You carry this but SB is out of stock — turn on!">🟠 SB OOS — turn on</span>';
+    } else if (mcgHit && mcgHit.status === "mcgOnly") {
+      statusBadge = '<span class="badge sig-red">🔴 not carried by SB</span>';
     } else {
-      statusBadge = '<span class="badge sig-green">🟢 ' + (r.yourSources || "yes") + '</span>';
+      statusBadge = '<span class="badge sig-red">🔴 not found</span>';
     }
     var rowCls = restricted ? "restricted-row" : "";
     return '<tr class="' + rowCls + '">' + cols.map(function(c){
@@ -3369,5 +3479,116 @@ function setupExtraSkuHandlers() {
         renderCrossPlantPanel();
       });
     })(cBtns[i]);
+  }
+}
+// ============================================================
+// MCG TRACKER INTEGRATION
+// Fetches live "SB out of stock" + "Not in SB" data from sb-mcg-check.netlify.app
+// ============================================================
+var MCG_STATE = { token: null, tokenExpires: 0, data: null, fetchedAt: 0, error: null, loading: false };
+var MCG_CACHE_KEY = "sb-mcg-tracker-cache-v1";
+var MCG_CACHE_TTL_MS = 60 * 60 * 1000;  // 1 hour local cache
+
+function mcgConfig() {
+  var pwdMeta = document.querySelector('meta[name="sb-mcg-password"]');
+  var urlMeta = document.querySelector('meta[name="sb-mcg-url"]');
+  return {
+    password: pwdMeta ? pwdMeta.content : "",
+    baseUrl: urlMeta ? urlMeta.content : "https://sb-mcg-check.netlify.app"
+  };
+}
+
+function mcgLoadCache() {
+  try {
+    var raw = localStorage.getItem(MCG_CACHE_KEY);
+    if (!raw) return null;
+    var d = JSON.parse(raw);
+    if (Date.now() - d.fetchedAt > MCG_CACHE_TTL_MS) return null;
+    return d;
+  } catch(_) { return null; }
+}
+function mcgSaveCache(data) {
+  try { localStorage.setItem(MCG_CACHE_KEY, JSON.stringify({data: data, fetchedAt: Date.now()})); } catch(_){}
+}
+
+async function mcgAuth() {
+  var cfg = mcgConfig();
+  if (!cfg.password) throw new Error("MCG password not configured");
+  var res = await fetch(cfg.baseUrl + "/.netlify/functions/auth", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({password: cfg.password})
+  });
+  var j = await res.json();
+  if (!res.ok || !j.token) throw new Error("MCG auth failed: " + (j.error || res.status));
+  MCG_STATE.token = j.token;
+  // Token valid 8h per scrape.js — expire after 7h to be safe
+  MCG_STATE.tokenExpires = Date.now() + 7 * 60 * 60 * 1000;
+  return j.token;
+}
+
+async function mcgFetch(forceRefresh) {
+  // Return cached if fresh and not forced
+  if (!forceRefresh) {
+    var cached = mcgLoadCache();
+    if (cached) { MCG_STATE.data = cached.data; MCG_STATE.fetchedAt = cached.fetchedAt; return cached.data; }
+  }
+  var cfg = mcgConfig();
+  if (!cfg.password) { MCG_STATE.error = "not configured"; return null; }
+  MCG_STATE.loading = true;
+  MCG_STATE.error = null;
+  try {
+    if (!MCG_STATE.token || Date.now() > MCG_STATE.tokenExpires) await mcgAuth();
+    var url = cfg.baseUrl + "/.netlify/functions/scrape" + (forceRefresh ? "?refresh=true" : "");
+    var res = await fetch(url, {headers: {"Authorization": "Bearer " + MCG_STATE.token}});
+    if (res.status === 401) {
+      // Token expired mid-flight — reauth and retry once
+      await mcgAuth();
+      res = await fetch(url, {headers: {"Authorization": "Bearer " + MCG_STATE.token}});
+    }
+    if (!res.ok) throw new Error("MCG scrape failed: " + res.status);
+    var j = await res.json();
+    MCG_STATE.data = j;
+    MCG_STATE.fetchedAt = Date.now();
+    mcgSaveCache(j);
+    return j;
+  } catch(e) {
+    MCG_STATE.error = e.message || String(e);
+    console.warn("MCG tracker fetch error:", e);
+    return null;
+  } finally {
+    MCG_STATE.loading = false;
+  }
+}
+
+// Build a lookup by SKU (normalized) into "sbOos" or "mcgOnly"
+function mcgSkuLookup() {
+  var lu = {};
+  if (!MCG_STATE.data) return lu;
+  var norm = function(s) { return String(s || "").toUpperCase().trim(); };
+  (MCG_STATE.data.sbOos || []).forEach(function(x) {
+    if (x.sku) lu[norm(x.sku)] = {status: "sbOos", name: x.name, url: x.url};
+  });
+  (MCG_STATE.data.mcgOnly || []).forEach(function(x) {
+    if (x.sku) lu[norm(x.sku)] = {status: "mcgOnly", name: x.name, url: x.url};
+  });
+  return lu;
+}
+
+// Kick off a background fetch on load if password is baked in
+function mcgAutoLoad() {
+  var cached = mcgLoadCache();
+  if (cached) {
+    MCG_STATE.data = cached.data;
+    MCG_STATE.fetchedAt = cached.fetchedAt;
+    // Also refresh in background if cache is >30min old
+    if (Date.now() - cached.fetchedAt > 30 * 60 * 1000) {
+      mcgFetch(false).then(function(){ if (typeof renderTab === "function") renderTab(activeTab); });
+    }
+    return;
+  }
+  var cfg = mcgConfig();
+  if (cfg.password) {
+    mcgFetch(false).then(function(){ if (typeof renderTab === "function") renderTab(activeTab); });
   }
 }

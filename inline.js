@@ -12,6 +12,13 @@ html = html.replace(
 html = html.replace('<script src="genus-data.js"></script>', () => '<script>' + gd + '</script>');
 html = html.replace('<script src="exclusions.js"></script>', () => '<script>' + exc + '</script>');
 html = html.replace('<script src="app.js"></script>', () => '<script>' + app + '</script>');
+// Inject SB_MCG_PASSWORD from Netlify env var (empty string if not set — feature just stays disabled)
+const mcgPwd = process.env.SB_MCG_PASSWORD || '';
+html = html.replace('__SB_MCG_PASSWORD__', () => mcgPwd);
+if (html.includes('__SB_MCG_PASSWORD__')) {
+  console.error('!!! MCG password placeholder not replaced');
+  process.exit(1);
+}
 if (html.includes('src="genus-data.js"') || html.includes('src="exclusions.js"') ||
     html.includes('src="app.js"') || html.includes('cdn.jsdelivr.net/npm/lz-string')) {
   console.error('!!! Script inlining failed');
