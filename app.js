@@ -3512,10 +3512,19 @@ function mcgSaveCache(data) {
   try { localStorage.setItem(MCG_CACHE_KEY, JSON.stringify({data: data, fetchedAt: Date.now()})); } catch(_){}
 }
 
+// Build endpoint URL — supports both same-origin proxy path (/api/mcg) and full external URL
+function mcgEndpoint(cfg, name) {
+  var base = cfg.baseUrl || "";
+  // If baseUrl is the external sb-mcg-check URL, keep the /.netlify/functions/ prefix.
+  // If it's the same-origin edge-proxy path (/api/mcg), the redirect already handles the prefix.
+  if (base.indexOf("netlify.app") >= 0) return base + "/.netlify/functions/" + name;
+  return base + "/" + name;
+}
+
 async function mcgAuth() {
   var cfg = mcgConfig();
   if (!cfg.password) throw new Error("MCG password not configured");
-  var res = await fetch(cfg.baseUrl + "/.netlify/functions/auth", {
+  var res = await fetch(mcgEndpoint(cfg, "auth"), {
     method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify({password: cfg.password})
@@ -3540,7 +3549,7 @@ async function mcgFetch(forceRefresh) {
   MCG_STATE.error = null;
   try {
     if (!MCG_STATE.token || Date.now() > MCG_STATE.tokenExpires) await mcgAuth();
-    var url = cfg.baseUrl + "/.netlify/functions/scrape" + (forceRefresh ? "?refresh=true" : "");
+    var url = mcgEndpoint(cfg, "scrape") + (forceRefresh ? "?refresh=true" : "");
     var res = await fetch(url, {headers: {"Authorization": "Bearer " + MCG_STATE.token}});
     if (res.status === 401) {
       // Token expired mid-flight — reauth and retry once
