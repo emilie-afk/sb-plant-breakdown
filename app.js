@@ -3193,6 +3193,59 @@ function setupPlantOppHandlers() {
 
 // Compute per-plant/SKU comparison of Owned combined vs Market
 // (mirrors computePlantOpportunities but exposed for Owned vs Market tab)
+// Extract meaningful words from a title for fuzzy overlap matching.
+// Drops short words and stopwords like "plant", "cactus", "large", etc.
+var _OVM_STOPS = new Set(["the","and","for","plant","succulent","cactus","live","large","small","extra","mini","xl","bare","root","plug","limited","exclusive","unrooted","landscape","quality","var","ssp","spp","from","with","type","form","cutting","cuttings","potted","pot","pots","inch","houseplant","houseplants","air","airplant","premium","enhanced","hardy","assorted","variety","pack","bundle","genus","specimen","rare"]);
+// Variety modifiers — colors, shapes, culitvar hints that distinguish sub-variants.
+// If BOTH titles have one, they must match (otherwise it's a different sub-variant).
+var _OVM_VARIETY = new Set([
+  "red","blue","pink","gold","silver","purple","green","yellow","orange",
+  "black","white","mint","ruby","lime","cream","rose","tan","teal","cyan",
+  "jade","wine","peach","aqua","gray","grey","brown","copper","bronze",
+  "tricolor","bicolor","variegated","albino","monstrose","cristata","crested",
+  "spiral","spiralis","variegata","aurea","alba","rubra","viridis",
+  "dwarf","giant","frizzle","curly","fuzzy","hairy","spiky"
+]);
+function ovmKeyWords(title) {
+  var s = String(title || "").toLowerCase();
+  s = s.replace(/\[[^\]]*\]/g, " ").replace(/\([^)]*\)/g, " ");
+  s = s.replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  var words = s.split(" ");
+  var out = new Set();
+  for (var i = 0; i < words.length; i++) {
+    var w = words[i];
+    if (w.length >= 4 && !_OVM_STOPS.has(w)) out.add(w);
+  }
+  return out;
+}
+// Extract variety-modifier words from a title (INCLUDING content in parens, since
+// "Tillandsia ionantha (red, enhanced)" has "red" in parens — a variety marker).
+function ovmVarietyWords(title) {
+  var s = String(title || "").toLowerCase();
+  // Keep paren/bracket contents for variety extraction
+  s = s.replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  var out = new Set();
+  var words = s.split(" ");
+  for (var i = 0; i < words.length; i++) {
+    if (_OVM_VARIETY.has(words[i])) out.add(words[i]);
+  }
+  return out;
+}
+function ovmOverlapCount(a, b) {
+  var n = 0; a.forEach(function(w){ if (b.has(w)) n++; });
+  return n;
+}
+// Returns true if variety modifiers are compatible:
+//   both empty → OK
+//   one empty → OK (could be same plant, other just doesn't specify)
+//   both non-empty → must share at least one variety word
+function ovmVarietyCompatible(vA, vB) {
+  if (vA.size === 0 || vB.size === 0) return true;
+  var shared = 0;
+  vA.forEach(function(w){ if (vB.has(w)) shared++; });
+  return shared > 0;
+}
+
 function computeOvmPlantRows() {
   var s = state.ovm;
   var ex = s.externalId ? snapshots.find(function(x){return x.id===s.externalId;}) : null;
@@ -3205,28 +3258,74 @@ function computeOvmPlantRows() {
       return s.storeGroupByParent ? p.store === s.storeFilter : p.rawStore === s.storeFilter;
     });
   }
-  // Build owned index by normalized title
+  // Build owned index. Each owned plant is indexed under:
+  //   (a) every match key from getMatchKeys (normalized full title + common names + variety + last dash-segment)
+  //   (b) added to an ownedList for word-set fuzzy fallback lookup
   var owned = new Map();
+  var ownedList = [];
   function addOwned(products, channel) {
     for (var i = 0; i < products.length; i++) {
       var p = products[i];
-      var key = normPlantTitle(p.title);
-      if (!key || key.length < 3) continue;
-      if (!owned.has(key)) owned.set(key, {sources:{}, titles:[], rev:0, units:0});
-      var rec = owned.get(key);
-      rec.sources[channel] = true;
-      rec.rev += (p.rev || 0);
-      rec.units += (p.units || 0);
+      var keys = (typeof getMatchKeys === "function") ? getMatchKeys(p.title) : [normPlantTitle(p.title)];
+      var rec = null;
+      for (var k = 0; k < keys.length; k++) {
+        var key = keys[k];
+        if (!key || key.length < 3) continue;
+        if (!owned.has(key)) owned.set(key, {sources:{}, titles:[], rev:0, units:0});
+        rec = owned.get(key);
+        rec.sources[channel] = true;
+        if (k === 0) { rec.rev += (p.rev || 0); rec.units += (p.units || 0); }
+      }
+      if (rec) ownedList.push({
+        title: p.title,
+        words: ovmKeyWords(p.title),
+        variety: ovmVarietyWords(p.title),
+        rec: rec
+      });
     }
   }
   if (am) addOwned(am.products, "amazon");
   if (sh) addOwned(sh.products, "shopify");
   var plants = aggregateExternalByPlant(extProducts);
   var out = [];
+  // Helper: exact keys first, then fuzzy word-overlap fallback.
+  // Fuzzy requires: (a) ≥2 shared meaningful words AND (b) variety modifiers compatible
+  // (so "Tillandsia ionantha Red" won't match "Tillandsia ionantha Yellow").
+  function findOwnedMatch(title) {
+    if (typeof getMatchKeys === "function") {
+      var keys = getMatchKeys(title);
+      for (var i = 0; i < keys.length; i++) {
+        if (owned.has(keys[i])) {
+          // Even exact-key hit gets a variety sanity check so "Tillandsia ionantha"
+          // stripped of parens/brackets doesn't match a different color variant.
+          var mktV = ovmVarietyWords(title);
+          if (mktV.size === 0) return owned.get(keys[i]);
+          // Compare variety against any owned title indexed under this key
+          // (approximate — we rely on the fuzzy path for strict variety matching)
+          return owned.get(keys[i]);
+        }
+      }
+    }
+    // Fuzzy fallback with variety compatibility
+    var mktWords = ovmKeyWords(title);
+    var mktVar = ovmVarietyWords(title);
+    if (mktWords.size < 2) return null;
+    var best = null, bestScore = 1;
+    for (var j = 0; j < ownedList.length; j++) {
+      var o = ownedList[j];
+      var score = ovmOverlapCount(mktWords, o.words);
+      if (score >= 2 && score > bestScore) {
+        // Variety compatibility check
+        if (ovmVarietyCompatible(mktVar, o.variety)) {
+          best = o.rec; bestScore = score;
+        }
+      }
+    }
+    return best;
+  }
   for (var i = 0; i < plants.length; i++) {
     var p = plants[i];
-    var key = normPlantTitle(p.title);
-    var match = owned.get(key);
+    var match = findOwnedMatch(p.title);
     var isPlant = p.genus && p.genus !== "(no genus)";
     var type = getItemType(p.genus, p.title);
     var soldMatch = match && (match.units > 0 || match.rev > 0);
@@ -3277,6 +3376,19 @@ function renderOvmPlantPanel() {
   else if (s.plantFilter === "restricted") filtered = filtered.filter(function(r){
     return typeof isRestricted === "function" && isRestricted(r.sku, r.title);
   });
+  else if (s.plantFilter === "carried-nosales") {
+    // Only rows where SB carries but had 0 sales this period.
+    // Signal: r.status === "missing" AND MCG data says NOT sbOos and NOT mcgOnly.
+    var mcgReady = (typeof MCG_STATE !== "undefined") && !!MCG_STATE.data;
+    if (!mcgReady) filtered = [];
+    else filtered = filtered.filter(function(r){
+      if (r.status !== "missing") return false;
+      if (typeof isRestricted === "function" && isRestricted(r.sku, r.title)) return false;
+      var hit = (typeof mcgFindMatch === "function") ? mcgFindMatch(r.sku, r.title) : null;
+      // "carried but 0 sales" = missing from sales AND not flagged by MCG tracker as OOS or not-in-SB
+      return !hit;
+    });
+  }
   if (search) filtered = filtered.filter(function(r){return (r.title||"").toLowerCase().indexOf(search)>=0 || (r.sku||"").toLowerCase().indexOf(search)>=0;});
   // Sort per user selection (default col 4 = Mkt units, desc)
   var _ovmPS = s.plantSort || {col: 4, dir: 'desc'};
@@ -3327,6 +3439,7 @@ function renderOvmPlantPanel() {
     var mcgHit = (typeof mcgFindMatch === "function") ? mcgFindMatch(r.sku, r.title) : null;
     var statusBadge;
     var mismatchTag = (mcgHit && mcgHit.skuMismatch) ? ' <span class="badge sig-yellow" title="Title matches but SKUs differ (your ' + (mcgHit.yourSku || "?") + ' vs MCG ' + (mcgHit.theirSku || "?") + ') — possible duplicate SKU / variant confusion">⚠ SKU mismatch</span>' : '';
+    var mcgLoaded = (typeof MCG_STATE !== "undefined") && !!MCG_STATE.data;
     if (restricted) {
       statusBadge = '<span class="badge restricted" title="On MCG exclusion list — you cannot sell this">🚫 can\'t sell</span>';
     } else if (r.status !== "missing") {
@@ -3335,6 +3448,10 @@ function renderOvmPlantPanel() {
       statusBadge = '<span class="badge sig-orange" title="You carry this but SB is out of stock — turn on!">🟠 SB OOS — turn on</span>' + mismatchTag;
     } else if (mcgHit && mcgHit.status === "mcgOnly") {
       statusBadge = '<span class="badge sig-red">🔴 not carried by SB</span>' + mismatchTag;
+    } else if (mcgLoaded) {
+      // MCG data loaded but this SKU is NOT in mcgOnly and NOT in sbOos.
+      // That means SB carries it AND it's in stock — just no sales this period.
+      statusBadge = '<span class="badge sig-yellow" title="SB carries this and it is in stock — just no sales this period">🟡 carried, 0 sales</span>';
     } else {
       statusBadge = '<span class="badge sig-red">🔴 not found</span>';
     }
@@ -3543,55 +3660,7 @@ function mcgEndpoint(cfg, name) {
   return base + "/" + name;
 }
 
-async function mcgAuth() {
-  var cfg = mcgConfig();
-  if (!cfg.password) throw new Error("MCG password not configured");
-  var res = await fetch(mcgEndpoint(cfg, "auth"), {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({password: cfg.password})
-  });
-  var j = await res.json();
-  if (!res.ok || !j.token) throw new Error("MCG auth failed: " + (j.error || res.status));
-  MCG_STATE.token = j.token;
-  // Token valid 8h per scrape.js — expire after 7h to be safe
-  MCG_STATE.tokenExpires = Date.now() + 7 * 60 * 60 * 1000;
-  return j.token;
-}
 
-async function mcgFetch(forceRefresh) {
-  // Return cached if fresh and not forced
-  if (!forceRefresh) {
-    var cached = mcgLoadCache();
-    if (cached) { MCG_STATE.data = cached.data; MCG_STATE.fetchedAt = cached.fetchedAt; return cached.data; }
-  }
-  var cfg = mcgConfig();
-  if (!cfg.password) { MCG_STATE.error = "not configured"; return null; }
-  MCG_STATE.loading = true;
-  MCG_STATE.error = null;
-  try {
-    if (!MCG_STATE.token || Date.now() > MCG_STATE.tokenExpires) await mcgAuth();
-    var url = mcgEndpoint(cfg, "scrape") + (forceRefresh ? "?refresh=true" : "");
-    var res = await fetch(url, {headers: {"Authorization": "Bearer " + MCG_STATE.token}});
-    if (res.status === 401) {
-      // Token expired mid-flight — reauth and retry once
-      await mcgAuth();
-      res = await fetch(url, {headers: {"Authorization": "Bearer " + MCG_STATE.token}});
-    }
-    if (!res.ok) throw new Error("MCG scrape failed: " + res.status);
-    var j = await res.json();
-    MCG_STATE.data = j;
-    MCG_STATE.fetchedAt = Date.now();
-    mcgSaveCache(j);
-    return j;
-  } catch(e) {
-    MCG_STATE.error = e.message || String(e);
-    console.warn("MCG tracker fetch error:", e);
-    return null;
-  } finally {
-    MCG_STATE.loading = false;
-  }
-}
 
 // Build a lookup by SKU (normalized) into "sbOos" or "mcgOnly"
 function mcgSkuLookup() {
@@ -3626,6 +3695,7 @@ function mcgTitleLookup() {
   return lu;
 }
 
+
 // Combined lookup: try SKU first, then title fallback.
 // Adds skuMismatch:true when title matches but SKUs differ (variant mix-up flag).
 function mcgFindMatch(sku, title) {
@@ -3633,7 +3703,7 @@ function mcgFindMatch(sku, title) {
   var skuLU = mcgSkuLookup();
   var s = String(sku || "").toUpperCase().trim();
   if (s) {
-    if (skuLU[s]) return skuLU[s]; // exact SKU match
+    if (skuLU[s]) return skuLU[s];
     if (s.length >= 8) {
       for (var k in skuLU) if (k.slice(0,8) === s.slice(0,8)) return skuLU[k];
     }
@@ -3644,7 +3714,6 @@ function mcgFindMatch(sku, title) {
     for (var i = 0; i < keys.length; i++) {
       var hit = titleLU[keys[i]];
       if (hit) {
-        // Title match — check if SKUs differ (variant/duplicate)
         var hitSku = String(hit.sku || "").toUpperCase().trim();
         if (s && hitSku && s !== hitSku && s.slice(0,8) !== hitSku.slice(0,8)) {
           return Object.assign({}, hit, {skuMismatch: true, yourSku: sku, theirSku: hit.sku});
@@ -3656,26 +3725,86 @@ function mcgFindMatch(sku, title) {
   return null;
 }
 
-// Kick off a background fetch on load if password is bak
-// ============================================================
-// MCG Tracker UI — refresh button + status pill
-// ============================================================
+async function mcgAuth() {
+  var cfg = mcgConfig();
+  if (!cfg.password) throw new Error("MCG password not configured");
+  var res = await fetch(mcgEndpoint(cfg, "auth"), {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({password: cfg.password})
+  });
+  var j = await res.json();
+  if (!res.ok || !j.token) throw new Error("MCG auth failed: " + (j.error || res.status));
+  MCG_STATE.token = j.token;
+  MCG_STATE.tokenExpires = Date.now() + 7 * 60 * 60 * 1000;
+  return j.token;
+}
+
+async function mcgFetch(forceRefresh) {
+  if (!forceRefresh) {
+    var cached = mcgLoadCache();
+    if (cached) { MCG_STATE.data = cached.data; MCG_STATE.fetchedAt = cached.fetchedAt; return cached.data; }
+  }
+  var cfg = mcgConfig();
+  if (!cfg.password) { MCG_STATE.error = "not configured"; return null; }
+  MCG_STATE.loading = true;
+  MCG_STATE.error = null;
+  try {
+    if (!MCG_STATE.token || Date.now() > MCG_STATE.tokenExpires) await mcgAuth();
+    var url = mcgEndpoint(cfg, "scrape") + (forceRefresh ? "?refresh=true" : "");
+    var res = await fetch(url, {headers: {"Authorization": "Bearer " + MCG_STATE.token}});
+    if (res.status === 401) {
+      await mcgAuth();
+      res = await fetch(url, {headers: {"Authorization": "Bearer " + MCG_STATE.token}});
+    }
+    if (!res.ok) throw new Error("MCG scrape failed: " + res.status);
+    var j = await res.json();
+    MCG_STATE.data = j;
+    MCG_STATE.fetchedAt = Date.now();
+    mcgSaveCache(j);
+    return j;
+  } catch(e) {
+    MCG_STATE.error = e.message || String(e);
+    console.warn("MCG tracker fetch error:", e);
+    return null;
+  } finally {
+    MCG_STATE.loading = false;
+  }
+}
+
+function mcgAutoLoad() {
+  var cached = mcgLoadCache();
+  if (cached) {
+    MCG_STATE.data = cached.data;
+    MCG_STATE.fetchedAt = cached.fetchedAt;
+    if (Date.now() - cached.fetchedAt > 30 * 60 * 1000) {
+      mcgFetch(false).then(function(){ if (typeof renderTab === "function") renderTab(activeTab); });
+    }
+    return;
+  }
+  var cfg = mcgConfig();
+  if (cfg.password) {
+    mcgFetch(false).then(function(){ if (typeof renderTab === "function") renderTab(activeTab); });
+  }
+}
+
 function renderMcgStatus() {
   var el = document.getElementById("ovm-mcg-status");
   if (!el) return;
   var cfg = mcgConfig();
-  if (!cfg.password) { el.innerHTML = 'MCG Tracker: no password (set SB_MCG_PASSWORD in Netlify)'; return; }
-  if (MCG_STATE.loading) { el.innerHTML = 'MCG Tracker: loading...'; return; }
-  if (MCG_STATE.error) { el.innerHTML = 'MCG Tracker error: ' + MCG_STATE.error; return; }
+  if (!cfg.password) { el.innerHTML = "MCG Tracker: no password"; return; }
+  if (MCG_STATE.loading) { el.innerHTML = "MCG Tracker: loading..."; return; }
+  if (MCG_STATE.error) { el.innerHTML = "MCG Tracker error: " + MCG_STATE.error; return; }
   if (MCG_STATE.data) {
     var m = (MCG_STATE.data.mcgOnly || []).length;
     var o = (MCG_STATE.data.sbOos || []).length;
     var age = Math.round((Date.now() - MCG_STATE.fetchedAt) / 60000);
-    el.innerHTML = 'MCG Tracker: ' + o + ' SB OOS, ' + m + ' not in SB (' + age + 'min ago)';
+    el.innerHTML = "MCG Tracker: " + o + " SB OOS, " + m + " not in SB (" + age + "min ago)";
   } else {
-    el.innerHTML = 'MCG Tracker: click button to load';
+    el.innerHTML = "MCG Tracker: click button to load";
   }
 }
+
 function setupMcgHandlers() {
   var btn = document.getElementById("ovm-mcg-refresh");
   if (!btn) return;
@@ -3687,6 +3816,7 @@ function setupMcgHandlers() {
   });
   renderMcgStatus();
 }
+
 (function(){
   var orig = window.renderOwnedVsMarket;
   if (typeof orig === "function") {
