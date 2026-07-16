@@ -2,6 +2,7 @@
 // STATE
 // ============================================================
 const STORAGE_KEY = "sb-analyzer-snapshots-v1";
+const STORAGE_KEY_LZ = STORAGE_KEY + "-lz";
 let snapshots = loadSnapshots();
 let activeTab = "amazon";
 let state = {
@@ -18,7 +19,6 @@ let showNonPlant = false;
 // ============================================================
 // SNAPSHOT STORAGE
 // ============================================================
-const STORAGE_KEY_LZ = STORAGE_KEY + "-lz";
 function loadSnapshots(){
   // Try LZ compressed first; on any failure, fall back to legacy raw key.
   try {
