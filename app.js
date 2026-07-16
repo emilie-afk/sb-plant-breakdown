@@ -3827,3 +3827,78 @@ function setupMcgHandlers() {
     };
   }
 })();
+
+// ============================================================
+// OVM Per-SKU CSV download
+// ============================================================
+function downloadOvmPlants() {
+  var rows = computeOvmPlantRows();
+  if (!rows || !rows.length) { alert("No SKU data — load Amazon/Shopify + External snapshots first."); return; }
+  var s = state.ovm;
+  var search = (document.getElementById("ovm-plant-search").value || "").toLowerCase();
+  var drill = s.drillGenus;
+  var filtered = rows;
+  if (drill) filtered = filtered.filter(function(r){return r.genus === drill;});
+  else filtered = filtered.filter(function(r){return r.mktUnits >= (s.plantThreshold || 10);});
+  if (s.plantFilter === "missing") filtered = filtered.filter(function(r){return r.status === "missing";});
+  else if (s.plantFilter === "both") filtered = filtered.filter(function(r){return r.status === "both";});
+  else if (s.plantFilter === "nonplant") filtered = filtered.filter(function(r){return !r.isPlant;});
+  else if (s.plantFilter === "restricted") filtered = filtered.filter(function(r){return typeof isRestricted === "function" && isRestricted(r.sku, r.title);});
+  else if (s.plantFilter === "carried-nosales") {
+    var mcgReady = (typeof MCG_STATE !== "undefined") && !!MCG_STATE.data;
+    if (!mcgReady) filtered = [];
+    else filtered = filtered.filter(function(r){
+      if (r.status !== "missing") return false;
+      if (typeof isRestricted === "function" && isRestricted(r.sku, r.title)) return false;
+      var hit = (typeof mcgFindMatch === "function") ? mcgFindMatch(r.sku, r.title) : null;
+      return !hit;
+    });
+  }
+  if (search) filtered = filtered.filter(function(r){return (r.title||"").toLowerCase().indexOf(search)>=0 || (r.sku||"").toLowerCase().indexOf(search)>=0;});
+
+  function statusLabel(r) {
+    var restricted = (typeof isRestricted === "function") && isRestricted(r.sku, r.title);
+    var mcgHit = (typeof mcgFindMatch === "function") ? mcgFindMatch(r.sku, r.title) : null;
+    var mcgLoaded = (typeof MCG_STATE !== "undefined") && !!MCG_STATE.data;
+    if (restricted) return "can't sell (exclusion)";
+    if (r.status !== "missing") return "sold on " + (r.yourSources || "yes");
+    if (mcgHit && mcgHit.status === "sbOos") return "SB out of stock - turn on";
+    if (mcgHit && mcgHit.status === "mcgOnly") return "not carried by SB";
+    if (mcgLoaded) return "carried, 0 sales";
+    return "not found";
+  }
+
+  var esc = function(v){var s=String(v==null?"":v);return s.indexOf(",")>=0||s.indexOf('"')>=0||s.indexOf("\n")>=0 ? '"'+s.replace(/"/g,'""')+'"' : s;};
+  var header = "Plant,SKU,Genus,Type,Market Units,Market Rev (est.),Market Orders,Market Stores,Status,Your Units,Your Rev,Your Sources\n";
+  var body = filtered.map(function(r){
+    return [
+      esc(r.title), esc(r.sku), esc(r.genus), esc(r.type),
+      r.mktUnits, r.mktRev.toFixed(2), r.mktOrders || 0, r.mktStores || 0,
+      esc(statusLabel(r)),
+      r.yourUnits || 0, (r.yourRev || 0).toFixed(2),
+      esc(r.yourSources || "")
+    ].join(",");
+  }).join("\n");
+  var csv = header + body;
+  var blob = new Blob([csv], {type: "text/csv"});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  var suffix = drill ? "-" + drill : "";
+  var filterTag = s.plantFilter !== "all" ? "-" + s.plantFilter : "";
+  a.href = url;
+  a.download = "ovm-plants" + suffix + filterTag + ".csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+(function(){
+  var btn = document.getElementById("ovm-plant-download");
+  if (btn) btn.addEventListener("click", downloadOvmPlants);
+  else {
+    // If DOM isn't ready yet, defer wiring
+    document.addEventListener("DOMContentLoaded", function() {
+      var b = document.getElementById("ovm-plant-download");
+      if (b) b.addEventListener("click", downloadOvmPlants);
+    });
+  }
+})();
