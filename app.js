@@ -3267,16 +3267,32 @@ function computeOvmPlantRows() {
     for (var i = 0; i < products.length; i++) {
       var p = products[i];
       var keys = (typeof getMatchKeys === "function") ? getMatchKeys(p.title) : [normPlantTitle(p.title)];
-      var rec = null;
-      for (var k = 0; k < keys.length; k++) {
+      if (!keys.length) continue;
+      // Get or create ONE record for this product's actual sales (units + rev).
+      // Primary key (normalized full title) is authoritative; if it collides with another
+      // product, merge units/rev into that record. Secondary keys (common names, dash
+      // segments) all point to this same record so lookups via any key return correct units.
+      var primaryKey = keys[0];
+      if (!primaryKey || primaryKey.length < 3) continue;
+      var rec;
+      if (owned.has(primaryKey)) {
+        rec = owned.get(primaryKey);
+        rec.sources[channel] = true;
+        rec.rev += (p.rev || 0);
+        rec.units += (p.units || 0);
+        if (rec.titles.indexOf(p.title) < 0 && rec.titles.length < 3) rec.titles.push(p.title);
+      } else {
+        rec = {sources: {}, titles: [p.title], rev: p.rev || 0, units: p.units || 0};
+        rec.sources[channel] = true;
+        owned.set(primaryKey, rec);
+      }
+      // Register secondary keys → this same rec (only if unclaimed, to avoid clobbering)
+      for (var k = 1; k < keys.length; k++) {
         var key = keys[k];
         if (!key || key.length < 3) continue;
-        if (!owned.has(key)) owned.set(key, {sources:{}, titles:[], rev:0, units:0});
-        rec = owned.get(key);
-        rec.sources[channel] = true;
-        if (k === 0) { rec.rev += (p.rev || 0); rec.units += (p.units || 0); }
+        if (!owned.has(key)) owned.set(key, rec);
       }
-      if (rec) ownedList.push({
+      ownedList.push({
         title: p.title,
         words: ovmKeyWords(p.title),
         variety: ovmVarietyWords(p.title),
@@ -3855,7 +3871,6 @@ function downloadOvmPlants() {
     });
   }
   if (search) filtered = filtered.filter(function(r){return (r.title||"").toLowerCase().indexOf(search)>=0 || (r.sku||"").toLowerCase().indexOf(search)>=0;});
-
   function statusLabel(r) {
     var restricted = (typeof isRestricted === "function") && isRestricted(r.sku, r.title);
     var mcgHit = (typeof mcgFindMatch === "function") ? mcgFindMatch(r.sku, r.title) : null;
@@ -3867,7 +3882,6 @@ function downloadOvmPlants() {
     if (mcgLoaded) return "carried, 0 sales";
     return "not found";
   }
-
   var esc = function(v){var s=String(v==null?"":v);return s.indexOf(",")>=0||s.indexOf('"')>=0||s.indexOf("\n")>=0 ? '"'+s.replace(/"/g,'""')+'"' : s;};
   var header = "Plant,SKU,Genus,Type,Market Units,Market Rev (est.),Market Orders,Market Stores,Status,Your Units,Your Rev,Your Sources\n";
   var body = filtered.map(function(r){
@@ -3890,12 +3904,10 @@ function downloadOvmPlants() {
   a.click();
   URL.revokeObjectURL(url);
 }
-
 (function(){
   var btn = document.getElementById("ovm-plant-download");
   if (btn) btn.addEventListener("click", downloadOvmPlants);
   else {
-    // If DOM isn't ready yet, defer wiring
     document.addEventListener("DOMContentLoaded", function() {
       var b = document.getElementById("ovm-plant-download");
       if (b) b.addEventListener("click", downloadOvmPlants);
