@@ -2284,11 +2284,33 @@ function renderExternalDrill(genus, genera) {
     {key: 'orders', label: 'Orders', num: true, fmt: fmtN},
     {key: 'storeCount', label: 'Stores', num: true, fmt: fmtN}
   ];
-  document.getElementById('external-prod-thead').innerHTML = cols.map(c =>
-    `<th class="${c.num ? 'num' : ''}">${c.label}</th>`).join('');
+  // Sort per user selection (default col 2 = Units, desc)
+  if (!state.external.drillSort) state.external.drillSort = {col: 2, dir: 'desc'};
+  const ds = state.external.drillSort;
+  byTitle.sort((a, b) => {
+    const kv = cols[ds.col].key;
+    const dir = ds.dir === 'asc' ? 1 : -1;
+    const av = a[kv], bv = b[kv];
+    if (typeof av === 'string' || typeof bv === 'string') {
+      return String(av || '').localeCompare(String(bv || '')) * dir;
+    }
+    return ((av || 0) > (bv || 0) ? 1 : (av || 0) < (bv || 0) ? -1 : 0) * dir;
+  });
+  document.getElementById('external-prod-thead').innerHTML = cols.map((c, i) => {
+    const arrow = i === ds.col ? (ds.dir === 'asc' ? ' ▲' : ' ▼') : '';
+    return `<th class="${c.num ? 'num' : ''}" data-ext-drill-sort="${i}">${c.label}${arrow}</th>`;
+  }).join('');
   document.getElementById('external-prod-tbody').innerHTML = byTitle.map(p =>
     `<tr>${cols.map(c => `<td class="${c.num ? 'num' : ''}">${c.fmt ? c.fmt(p[c.key]) : (p[c.key] || '')}</td>`).join('')}</tr>`).join('');
   document.getElementById('external-drill-count').textContent = byTitle.length + ' plants';
+  document.getElementById('external-prod-thead').querySelectorAll('[data-ext-drill-sort]').forEach(th => {
+    th.addEventListener('click', () => {
+      const idx = +th.dataset.extDrillSort;
+      if (ds.col === idx) ds.dir = ds.dir === 'asc' ? 'desc' : 'asc';
+      else { ds.col = idx; ds.dir = 'desc'; }
+      renderExternal();
+    });
+  });
 }
 
 function renderExternalInsights(snap, byStore, genera) {
