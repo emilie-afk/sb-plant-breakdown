@@ -4,3 +4,12 @@
 
 [build.environment]
   NODE_VERSION = "20"
+
+# Edge proxy to sb-mcg-check API (avoids browser CORS block).
+# Browser calls same-origin /api/mcg/auth and /api/mcg/scrape;
+# Netlify's CDN transparently forwards to sb-mcg-check without invoking any function.
+[[redirects]]
+  from = "/api/mcg/*"
+  to = "https://sb-mcg-check.netlify.app/.netlify/functions/:splat"
+  status = 200
+  force = true
