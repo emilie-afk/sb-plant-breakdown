@@ -297,7 +297,7 @@ function parseShopifyCatalog(rows){
       if (st === 'draft' || st === 'archived') continue;
     }
     products.push({
-      asin: sku, title,
+      asin: sku, sku: sku, title,
       units: 0, rev: 0, avg: 0, glance: 0, conv: 0,
       inv: inv,
       catalogOnly: true,
@@ -331,11 +331,12 @@ async function handleFile(source, file){
     else throw new Error("Unknown source: " + source);
     if (!products.length) { alert("No data rows found in file."); return; }
 
-    // Catalog is a permanent lookup — no period needed, keep a single record per source
+    // Catalog is a permanent lookup — allow multiple files (each gets a unique id from filename)
     if (isCatalog) {
+      const slug = String(file.name || "unnamed").toLowerCase().replace(/[^a-z0-9]/g, "_").slice(0, 40);
       const snap = {
-        id: "catalog_" + source,
-        source: source, label: "Catalog (" + source + ")",
+        id: "catalog_" + source + "_" + slug,
+        source: source, label: "Catalog (" + source + ": " + file.name + ")",
         startDate: "0000-00-00", endDate: "9999-12-31",
         fileName: file.name,
         uploadedAt: new Date().toISOString(),
@@ -343,7 +344,8 @@ async function handleFile(source, file){
         products
       };
       addSnapshot(snap);
-      alert("Catalog loaded: " + products.length + " listings. This will now be used automatically in Owned vs Market and Opportunity Map to distinguish 'listed but 0 sales' from 'not carried'.");
+      const totalCatalogProducts = catalogSnapshots().reduce((n, s) => n + (s.products || []).length, 0);
+      alert("Catalog loaded: " + products.length + " listings from " + file.name + ". Total across all catalog files: " + totalCatalogProducts + ".");
       renderTab(activeTab);
       return;
     }
@@ -1836,6 +1838,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupExternalHandlers(); setupOppMapHandlers(); setupOwnedVsMarketHandlers(); setupPlantOppHandlers(); setupExtraSkuHandlers();
   if (typeof setupMcgHandlers === "function") setupMcgHandlers();
   if (typeof mcgAutoLoad === "function") mcgAutoLoad();
+  if (typeof sbCatalogAutoLoad === "function") sbCatalogAutoLoad();
   for (const src of ['amazon','shopify']) {
     document.getElementById(`${src}-snap-select`).addEventListener('change', e => {
       state[src].snapshotId = e.target.value || null;
@@ -3262,16 +3265,13 @@ function computeOvmPlantRows() {
   //   (a) every match key from getMatchKeys (normalized full title + common names + variety + last dash-segment)
   //   (b) added to an ownedList for word-set fuzzy fallback lookup
   var owned = new Map();
+  var ownedBySku = new Map();  // SKU -> rec (authoritative match key)
   var ownedList = [];
   function addOwned(products, channel) {
     for (var i = 0; i < products.length; i++) {
       var p = products[i];
       var keys = (typeof getMatchKeys === "function") ? getMatchKeys(p.title) : [normPlantTitle(p.title)];
       if (!keys.length) continue;
-      // Get or create ONE record for this product's actual sales (units + rev).
-      // Primary key (normalized full title) is authoritative; if it collides with another
-      // product, merge units/rev into that record. Secondary keys (common names, dash
-      // segments) all point to this same record so lookups via any key return correct units.
       var primaryKey = keys[0];
       if (!primaryKey || primaryKey.length < 3) continue;
       var rec;
@@ -3282,11 +3282,21 @@ function computeOvmPlantRows() {
         rec.units += (p.units || 0);
         if (rec.titles.indexOf(p.title) < 0 && rec.titles.length < 3) rec.titles.push(p.title);
       } else {
-        rec = {sources: {}, titles: [p.title], rev: p.rev || 0, units: p.units || 0};
+        rec = {sources: {}, titles: [p.title], rev: p.rev || 0, units: p.units || 0, skus: []};
         rec.sources[channel] = true;
         owned.set(primaryKey, rec);
       }
-      // Register secondary keys → this same rec (only if unclaimed, to avoid clobbering)
+      // Track SKUs on the record
+      var pSku = String(p.sku || p.asin || "").toUpperCase().trim();
+      if (pSku) {
+        if (!rec.skus) rec.skus = [];
+        if (rec.skus.indexOf(pSku) < 0) rec.skus.push(pSku);
+        // Store ALL SB products for this SKU (may be multiple with different titles)
+        // so lookup can pick the best title match rather than first-wins.
+        if (!ownedBySku.has(pSku)) ownedBySku.set(pSku, []);
+        ownedBySku.get(pSku).push({rec: rec, title: p.title, words: ovmKeyWords(p.title)});
+      }
+      // Register secondary keys → this same rec (only if unclaimed)
       for (var k = 1; k < keys.length; k++) {
         var key = keys[k];
         if (!key || key.length < 3) continue;
@@ -3294,6 +3304,7 @@ function computeOvmPlantRows() {
       }
       ownedList.push({
         title: p.title,
+        sku: pSku,
         words: ovmKeyWords(p.title),
         variety: ovmVarietyWords(p.title),
         rec: rec
@@ -3302,27 +3313,50 @@ function computeOvmPlantRows() {
   }
   if (am) addOwned(am.products, "amazon");
   if (sh) addOwned(sh.products, "shopify");
+  // Include uploaded catalog snapshots (Shopify products.csv exports) — optional
+  if (typeof catalogSnapshots === "function") {
+    var cats = catalogSnapshots();
+    for (var ci = 0; ci < cats.length; ci++) addOwned(cats[ci].products, cats[ci].source || "shopify");
+  }
+  // Include LIVE SB catalog from succulentsbox.com/products.json (auto-fetched, no upload needed)
+  if (typeof sbLiveCatalogProducts === "function") {
+    var live = sbLiveCatalogProducts();
+    if (live && live.length) addOwned(live, "shopify");
+  }
   var plants = aggregateExternalByPlant(extProducts);
   var out = [];
-  // Helper: exact keys first, then fuzzy word-overlap fallback.
-  // Fuzzy requires: (a) ≥2 shared meaningful words AND (b) variety modifiers compatible
-  // (so "Tillandsia ionantha Red" won't match "Tillandsia ionantha Yellow").
-  function findOwnedMatch(title) {
+  // Helper: SKU exact match first, then title exact, then fuzzy word-overlap.
+  // Also detects when title matches but SKUs differ (potential wrong-SKU on listing).
+  // Returns {rec, matchKind: 'sku'|'title'|'fuzzy', skuMismatch: bool}
+  function findOwnedMatch(mktSku, title) {
+    var mktSkuU = String(mktSku || "").toUpperCase().trim();
+    // 1) SKU exact match. If multiple SB products share this SKU (different titles),
+    //    pick the one whose title best matches the market title (word overlap).
+    if (mktSkuU && ownedBySku.has(mktSkuU)) {
+      var candidates = ownedBySku.get(mktSkuU);
+      if (candidates.length === 1) {
+        return {rec: candidates[0].rec, matchKind: 'sku', skuMismatch: false};
+      }
+      var mktWords = ovmKeyWords(title);
+      var best = candidates[0], bestScore = -1;
+      for (var c = 0; c < candidates.length; c++) {
+        var score = ovmOverlapCount(mktWords, candidates[c].words);
+        if (score > bestScore) { best = candidates[c]; bestScore = score; }
+      }
+      return {rec: best.rec, matchKind: 'sku', skuMismatch: false};
+    }
+    // 2) Title exact key match
     if (typeof getMatchKeys === "function") {
       var keys = getMatchKeys(title);
       for (var i = 0; i < keys.length; i++) {
         if (owned.has(keys[i])) {
-          // Even exact-key hit gets a variety sanity check so "Tillandsia ionantha"
-          // stripped of parens/brackets doesn't match a different color variant.
-          var mktV = ovmVarietyWords(title);
-          if (mktV.size === 0) return owned.get(keys[i]);
-          // Compare variety against any owned title indexed under this key
-          // (approximate — we rely on the fuzzy path for strict variety matching)
-          return owned.get(keys[i]);
+          var rec = owned.get(keys[i]);
+          var mismatch = mktSkuU && rec.skus && rec.skus.length && rec.skus.indexOf(mktSkuU) < 0;
+          return {rec: rec, matchKind: 'title', skuMismatch: !!mismatch};
         }
       }
     }
-    // Fuzzy fallback with variety compatibility
+    // 3) Fuzzy fallback with variety compatibility
     var mktWords = ovmKeyWords(title);
     var mktVar = ovmVarietyWords(title);
     if (mktWords.size < 2) return null;
@@ -3331,24 +3365,28 @@ function computeOvmPlantRows() {
       var o = ownedList[j];
       var score = ovmOverlapCount(mktWords, o.words);
       if (score >= 2 && score > bestScore) {
-        // Variety compatibility check
         if (ovmVarietyCompatible(mktVar, o.variety)) {
           best = o.rec; bestScore = score;
         }
       }
     }
-    return best;
+    if (best) return {rec: best, matchKind: 'fuzzy', skuMismatch: false};
+    return null;
   }
   for (var i = 0; i < plants.length; i++) {
     var p = plants[i];
-    var match = findOwnedMatch(p.title);
+    var found = findOwnedMatch(p.sku, p.title);
+    var match = found ? found.rec : null;
+    var matchKind = found ? found.matchKind : null;
+    // "SKU mismatch worth flagging" = title matches but SKUs differ AND owned had 0 sales.
+    // Reason: if owned sold >0, the vendor probably fulfilled it from another source (fine).
+    // If owned sold 0, the SKU on the listing may be wrong — worth checking.
+    var skuFlagWorthy = found && found.skuMismatch && match && (match.units || 0) === 0 && (match.rev || 0) === 0;
     var isPlant = p.genus && p.genus !== "(no genus)";
     var type = getItemType(p.genus, p.title);
     var soldMatch = match && (match.units > 0 || match.rev > 0);
-    var catalogMatch = match && match.inCatalog && !soldMatch;
     var status;
     if (soldMatch) status = "both";
-    else if (catalogMatch) status = "listed";
     else status = "missing";
     out.push({
       title: p.title, sku: p.sku,
@@ -3358,7 +3396,9 @@ function computeOvmPlantRows() {
       yourUnits: match ? match.units : 0,
       yourRev: match ? match.rev : 0,
       yourSources: match ? Object.keys(match.sources).join("+") : "",
-      yourInv: match ? (match.inv || 0) : 0,
+      yourSkus: match && match.skus ? match.skus.slice() : [],
+      matchKind: matchKind,
+      skuMismatchFlag: !!skuFlagWorthy,
       status: status
     });
   }
@@ -3456,21 +3496,29 @@ function renderOvmPlantPanel() {
     var statusBadge;
     var mismatchTag = (mcgHit && mcgHit.skuMismatch) ? ' <span class="badge sig-yellow" title="Title matches but SKUs differ (your ' + (mcgHit.yourSku || "?") + ' vs MCG ' + (mcgHit.theirSku || "?") + ') — possible duplicate SKU / variant confusion">⚠ SKU mismatch</span>' : '';
     var mcgLoaded = (typeof MCG_STATE !== "undefined") && !!MCG_STATE.data;
+    // "SKU mismatch" tag: catalog title matches but SKUs differ AND owned had 0 sales →
+    // suggests the SKU on your listing might be wrong / needs updating.
+    var skuTag = r.skuMismatchFlag
+      ? ' <span class="badge sig-yellow" title="Title matches SB catalog but SKU differs (yours: ' + (r.yourSkus||[]).join(", ") + ' vs market: ' + (r.sku||"?") + '). 0 sales suggests SKU may be wrong on the listing.">⚠ check SKU</span>'
+      : '';
     if (restricted) {
       statusBadge = '<span class="badge restricted" title="On MCG exclusion list — you cannot sell this">🚫 can\'t sell</span>';
     } else if (r.status !== "missing") {
       statusBadge = '<span class="badge sig-green">🟢 sold on ' + (r.yourSources || "yes") + '</span>' + mismatchTag;
+    } else if (r.skuMismatchFlag) {
+      // Catalog match but 0 sales + SKU mismatch — actionable listing issue
+      statusBadge = '<span class="badge sig-orange" title="Your catalog has this title (SKU ' + (r.yourSkus||[]).join(", ") + ') but the market SKU is ' + (r.sku||"?") + '. Check if listing SKU needs updating.">🟠 SKU mismatch — 0 sales</span>';
     } else if (mcgHit && mcgHit.status === "sbOos") {
       statusBadge = '<span class="badge sig-orange" title="You carry this but SB is out of stock — turn on!">🟠 SB OOS — turn on</span>' + mismatchTag;
     } else if (mcgHit && mcgHit.status === "mcgOnly") {
       statusBadge = '<span class="badge sig-red">🔴 not carried by SB</span>' + mismatchTag;
     } else if (mcgLoaded) {
-      // MCG data loaded but this SKU is NOT in mcgOnly and NOT in sbOos.
-      // That means SB carries it AND it's in stock — just no sales this period.
       statusBadge = '<span class="badge sig-yellow" title="SB carries this and it is in stock — just no sales this period">🟡 carried, 0 sales</span>';
     } else {
       statusBadge = '<span class="badge sig-red">🔴 not found</span>';
     }
+    // Append skuTag to green (sold) case only if not already handled by SKU-mismatch branch
+    if (r.status !== "missing" && r.skuMismatchFlag) statusBadge += skuTag;
     var rowCls = restricted ? "restricted-row" : "";
     return '<tr class="' + rowCls + '">' + cols.map(function(c){
       if (c.k === "type") return "<td>" + typeBadge + "</td>";
@@ -3914,3 +3962,124 @@ function downloadOvmPlants() {
     });
   }
 })();
+
+// ============================================================
+// SB LIVE CATALOG — fetches all products directly from succulentsbox.com/products.json
+// (public Shopify endpoint, CORS-open). No upload needed.
+// Cached 24h in localStorage.
+// ============================================================
+var SB_CATALOG_STATE = { data: null, fetchedAt: 0, loading: false, error: null };
+var SB_CATALOG_CACHE_KEY = "sb-live-catalog-cache-v1";
+var SB_CATALOG_TTL_MS = 24 * 60 * 60 * 1000;
+
+function sbCatalogLoadCache() {
+  try {
+    var raw = localStorage.getItem(SB_CATALOG_CACHE_KEY);
+    if (!raw) return null;
+    var d = JSON.parse(raw);
+    if (Date.now() - d.fetchedAt > SB_CATALOG_TTL_MS) return null;
+    return d;
+  } catch(_) { return null; }
+}
+function sbCatalogSaveCache(products) {
+  try {
+    var payload = JSON.stringify({products: products, fetchedAt: Date.now()});
+    // Compress if lz-string available (catalog can be ~500KB uncompressed)
+    if (typeof LZString !== "undefined") {
+      localStorage.setItem(SB_CATALOG_CACHE_KEY, LZString.compressToUTF16(payload));
+    } else {
+      localStorage.setItem(SB_CATALOG_CACHE_KEY, payload);
+    }
+  } catch(_) {}
+}
+function sbCatalogLoadCacheDecompress() {
+  try {
+    var raw = localStorage.getItem(SB_CATALOG_CACHE_KEY);
+    if (!raw) return null;
+    var text;
+    if (typeof LZString !== "undefined") {
+      try { text = LZString.decompressFromUTF16(raw); } catch(_) { text = raw; }
+    }
+    if (!text) text = raw;
+    var d = JSON.parse(text);
+    if (Date.now() - d.fetchedAt > SB_CATALOG_TTL_MS) return null;
+    return d;
+  } catch(_) { return null; }
+}
+
+async function sbCatalogFetch(forceRefresh) {
+  if (!forceRefresh) {
+    var cached = sbCatalogLoadCacheDecompress();
+    if (cached && cached.products) {
+      SB_CATALOG_STATE.data = cached.products;
+      SB_CATALOG_STATE.fetchedAt = cached.fetchedAt;
+      return cached.products;
+    }
+  }
+  SB_CATALOG_STATE.loading = true;
+  SB_CATALOG_STATE.error = null;
+  var products = [];
+  try {
+    // Shopify's /products.json returns 30 products per page by default, max 250.
+    // Iterate until an empty page.
+    for (var page = 1; page <= 40; page++) {
+      var res = await fetch("https://succulentsbox.com/products.json?limit=250&page=" + page);
+      if (!res.ok) break;
+      var j = await res.json();
+      if (!j.products || j.products.length === 0) break;
+      for (var i = 0; i < j.products.length; i++) {
+        var p = j.products[i];
+        var title = p.title;
+        if (!title) continue;
+        // Skip drafts / unpublished
+        if (p.published_at === null) continue;
+        // Available if any variant is available
+        var available = (p.variants || []).some(function(v){return v.available;});
+        // Emit one row per variant (each has its own SKU)
+        for (var v = 0; v < (p.variants || []).length; v++) {
+          var vv = p.variants[v];
+          products.push({
+            asin: vv.sku, sku: vv.sku, title: title,
+            handle: p.handle,
+            units: 0, rev: 0, avg: 0, glance: 0, conv: 0,
+            inv: 0,  // /products.json doesn't expose inventory qty on storefront
+            available: available && vv.available,
+            catalogOnly: true,
+            genus: (typeof detectGenus === "function" ? detectGenus(title) : "") || "(no genus)"
+          });
+        }
+      }
+      if (j.products.length < 250) break;  // last page
+    }
+    if (!products.length) throw new Error("empty catalog");
+    SB_CATALOG_STATE.data = products;
+    SB_CATALOG_STATE.fetchedAt = Date.now();
+    sbCatalogSaveCache(products);
+    return products;
+  } catch(e) {
+    SB_CATALOG_STATE.error = e.message || String(e);
+    console.warn("SB catalog fetch error:", e);
+    return null;
+  } finally {
+    SB_CATALOG_STATE.loading = false;
+  }
+}
+
+function sbCatalogAutoLoad() {
+  var cached = sbCatalogLoadCacheDecompress();
+  if (cached && cached.products) {
+    SB_CATALOG_STATE.data = cached.products;
+    SB_CATALOG_STATE.fetchedAt = cached.fetchedAt;
+    // Refresh in background if >12h old
+    if (Date.now() - cached.fetchedAt > 12 * 60 * 60 * 1000) {
+      sbCatalogFetch(false).then(function(){ if (typeof renderTab === "function") renderTab(activeTab); });
+    }
+    return;
+  }
+  sbCatalogFetch(false).then(function(){ if (typeof renderTab === "function") renderTab(activeTab); });
+}
+
+// Return the live catalog as a "products" array compatible with addOwned
+function sbLiveCatalogProducts() {
+  return SB_CATALOG_STATE.data || [];
+}
