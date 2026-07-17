@@ -4083,3 +4083,50 @@ function sbCatalogAutoLoad() {
 function sbLiveCatalogProducts() {
   return SB_CATALOG_STATE.data || [];
 }
+
+// ============================================================
+// External Stores drill-down CSV download
+// ============================================================
+function downloadExternalDrill() {
+  var s = state.external;
+  if (!s.snapshotId || !s.drillGenus) { alert("Open a genus drill-down first."); return; }
+  var snap = snapshots.find(function(x){return x.id === s.snapshotId;});
+  if (!snap) return;
+  var products = snap.products;
+  if (s.storeFilter && s.storeFilter !== "all") {
+    products = products.filter(function(p){
+      return s.groupByParent ? p.store === s.storeFilter : p.rawStore === s.storeFilter;
+    });
+  }
+  var genera = aggregateExternalByGenus(products);
+  var g = genera.find(function(x){return x.genus === s.drillGenus;});
+  if (!g) { alert("Genus not found in current snapshot."); return; }
+  var search = (document.getElementById("external-prod-search").value || "").toLowerCase();
+  var byTitle = aggregateExternalByPlant(g.items).filter(function(p){return !search || p.title.toLowerCase().indexOf(search) >= 0;});
+  var esc = function(v){var s=String(v==null?"":v);return s.indexOf(",")>=0||s.indexOf('"')>=0||s.indexOf("\n")>=0 ? '"'+s.replace(/"/g,'""')+'"' : s;};
+  var header = "Plant,SKU,Units,Est. Rev,Orders,Stores\n";
+  var body = byTitle.map(function(p){
+    return [
+      esc(p.title), esc(p.sku),
+      p.units, (p.estRev||0).toFixed(2),
+      p.orders, p.storeCount
+    ].join(",");
+  }).join("\n");
+  var csv = header + body;
+  var blob = new Blob([csv], {type: "text/csv"});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  var safe = s.drillGenus.replace(/[^a-zA-Z0-9]/g, "_");
+  a.href = url;
+  a.download = "external-" + safe + "-plants.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+(function(){
+  function wire() {
+    var btn = document.getElementById("external-drill-download");
+    if (btn && !btn._wired) { btn._wired = true; btn.addEventListener("click", downloadExternalDrill); }
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", wire);
+  else wire();
+})();
