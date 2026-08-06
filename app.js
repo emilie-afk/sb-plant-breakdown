@@ -327,7 +327,22 @@ async function handleFile(source, file){
         products = parseShopify(rows);
       }
     }
-    else if (source === "external") products = parseShipStation(rows);
+    else if (source === "external") {
+      // Detect the "with-stores" companion file (has StoreName + OrderNumber, no Item Name)
+      if (isShipStationStoresCompanion(rows)) {
+        const lookup = parseShipStationStoresCompanion(rows);
+        const nOrders = Object.keys(lookup).length;
+        const storeCounts = {};
+        Object.values(lookup).forEach(v => { storeCounts[v.store] = (storeCounts[v.store]||0) + 1; });
+        const summary = Object.entries(storeCounts).sort((a,b)=>b[1]-a[1])
+          .map(([s,c]) => "  • " + s + ": " + c + " orders").join("\n");
+        saveStoresCompanion(lookup);
+        alert("Stores companion loaded: " + nOrders + " orders across:\n" + summary +
+              "\n\nNow upload the matching Shipments export (with Item Name column) and rows will be auto-tagged with the correct store.");
+        return;
+      }
+      products = parseShipStation(rows, file.name);
+    }
     else throw new Error("Unknown source: " + source);
     if (!products.length) { alert("No data rows found in file."); return; }
 
@@ -1945,8 +1960,49 @@ function normalizeExternalStore(raw) {
   return s;
 }
 
+// Detect the ShipStation "with-stores" companion format:
+// StoreName, OrderDate, OrderID, OrderItemID, OrderNumber, OrderTotal,
+// PackageCount, Package, Quantity, SKU, ProductID  (no Item Name — join by OrderNumber)
+function isShipStationStoresCompanion(rows) {
+  if (!rows || !rows.length) return false;
+  const h = rows[0].map(x => String(x || '').trim().toLowerCase());
+  return h.includes('storename') && h.includes('ordernumber') &&
+         !h.includes('item name') && !h.includes('description');
+}
+
+// Extract a lookup {orderNumber: {store, orderTotal, orderDate}} from the companion file
+function parseShipStationStoresCompanion(rows) {
+  const h = rows[0].map(x => String(x || '').trim());
+  const idx = {}; h.forEach((c, i) => { idx[c.toLowerCase()] = i; });
+  const iOrd = idx['ordernumber'], iStore = idx['storename'],
+        iTot = idx['ordertotal'], iDate = idx['orderdate'];
+  const map = {};
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i]; if (!r) continue;
+    const o = String(r[iOrd] || '').trim();
+    const s = String(r[iStore] || '').trim();
+    if (!o || !s) continue;
+    if (!(o in map)) map[o] = { store: s,
+      total: String(r[iTot] || '').trim(),
+      date:  String(r[iDate] || '').trim() };
+  }
+  return map;
+}
+
+// Persist / retrieve the stores-companion lookup so the user can upload the two files in any order.
+const STORES_COMPANION_KEY = 'sb_shipstation_stores_lookup';
+function saveStoresCompanion(map) {
+  try { localStorage.setItem(STORES_COMPANION_KEY, JSON.stringify(map)); return true; }
+  catch (e) { console.warn('stores companion save failed', e); return false; }
+}
+function loadStoresCompanion() {
+  try { return JSON.parse(localStorage.getItem(STORES_COMPANION_KEY) || '{}'); }
+  catch { return {}; }
+}
+function clearStoresCompanion() { try { localStorage.removeItem(STORES_COMPANION_KEY); } catch {} }
+
 // Parse a ShipStation Orders (line-item) export
-function parseShipStation(rows) {
+function parseShipStation(rows, filename) {
   if (!rows || !rows.length) return [];
   const header = rows[0].map(x => String(x || '').trim());
   const idx = {}; header.forEach((h, i) => { idx[h.toLowerCase()] = i; });
@@ -1955,14 +2011,27 @@ function parseShipStation(rows) {
     return -1;
   };
   const iOrder = col(['Order #', 'Order Number', 'OrderNumber']);
-  const iDate  = col(['Order Date', 'OrderDate']);
+  const iDate  = col(['Order Date', 'OrderDate', 'Ship Date']);
   const iSKU   = col(['Item SKU', 'SKU', 'Product SKU']);
   const iName  = col(['Item Name', 'Product Name', 'Description', 'Item']);
-  const iQty   = col(['Quantity', 'Item Quantity', 'Qty']);
+  const iQty   = col(['Item Quantity', 'Quantity', 'Qty']);
   const iTotal = col(['Order Total', 'Amount Paid', 'OrderTotal']);
   const iStore = col(['Store', 'Store Name', 'Marketplace', 'Source']);
-  if (iStore < 0 || iName < 0 || iOrder < 0) {
-    throw new Error('Not a ShipStation Orders export. Need columns: Store, Item Name, Order #. Re-export with "Export order line items" enabled.');
+  if (iName < 0 || iOrder < 0) {
+    throw new Error('Not a ShipStation export. Need columns: Item Name, Order #.');
+  }
+  // If Store column is missing (new "Shipments" template), try the cached stores-companion first,
+  // then fall back to filename inference.
+  const companion = iStore < 0 ? loadStoresCompanion() : null;
+  const hasCompanion = companion && Object.keys(companion).length > 0;
+  let defaultStore = "";
+  if (iStore < 0) {
+    const fn = String(filename || "").toLowerCase();
+    if (/mcg|mountain\s*crest/i.test(fn)) defaultStore = "Mountain Crest Gardens (MCG)";
+    else if (/leaf\s*&?\s*clay/i.test(fn)) defaultStore = "Leaf & Clay (Shopify)";
+    else if (/faire/i.test(fn)) defaultStore = "Faire";
+    else if (/etsy/i.test(fn)) defaultStore = "Etsy";
+    else defaultStore = "External (unknown store)";
   }
   const num = x => {
     if (typeof x === 'number') return x;
@@ -1970,26 +2039,44 @@ function parseShipStation(rows) {
     const n = parseFloat(String(x).replace(/[,$\s%]/g, ''));
     return isNaN(n) ? 0 : n;
   };
-  // Pass 1: gather lines + per-order totals
   const raw = [], unitsPerOrder = {}, totalPerOrder = {};
+  let joinedFromCompanion = 0, fellBackToDefault = 0;
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i]; if (!r) continue;
     const orderId = String(r[iOrder] || '').trim();
     if (!orderId) continue;
     const title = String(r[iName] || '').trim();
     if (!title || title === 'Item Name') continue;
-    const rawStore = String(r[iStore] || '').trim();
+    let rawStore, orderTotal, orderDate;
+    if (iStore >= 0) {
+      rawStore = String(r[iStore] || '').trim();
+      orderTotal = iTotal >= 0 ? num(r[iTotal]) : 0;
+      orderDate  = iDate  >= 0 ? String(r[iDate] || '').trim() : '';
+    } else if (hasCompanion && companion[orderId]) {
+      const meta = companion[orderId];
+      rawStore   = meta.store;
+      orderTotal = num(meta.total);
+      orderDate  = meta.date || '';
+      joinedFromCompanion++;
+    } else {
+      // Amazon order numbers start with 3-digit prefix + dash
+      rawStore = /^\d{3}-/.test(orderId) ? 'Amazon (MCG)' : defaultStore;
+      orderTotal = 0;
+      orderDate  = iDate >= 0 ? String(r[iDate] || '').trim() : '';
+      fellBackToDefault++;
+    }
     if (!rawStore) continue;
     const qty = Math.max(num(r[iQty]) || 1, 1);
-    const orderTotal = iTotal >= 0 ? num(r[iTotal]) : 0;
     const sku = String(r[iSKU] || '').trim();
-    const orderDate = iDate >= 0 ? String(r[iDate] || '').trim() : '';
     raw.push({orderId, orderDate, rawStore, store: normalizeExternalStore(rawStore),
               sku, title, qty, orderTotal});
     unitsPerOrder[orderId] = (unitsPerOrder[orderId] || 0) + qty;
     if (!(orderId in totalPerOrder)) totalPerOrder[orderId] = orderTotal;
   }
-  // Pass 2: attribute per-line estimated revenue via unit-share
+  if (hasCompanion) {
+    console.log('ShipStation join: ' + joinedFromCompanion + ' rows via companion, ' +
+                fellBackToDefault + ' rows via fallback.');
+  }
   return raw.map(line => {
     const tu = unitsPerOrder[line.orderId] || 1;
     const tot = totalPerOrder[line.orderId] || 0;
