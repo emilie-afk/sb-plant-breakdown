@@ -2165,55 +2165,87 @@ function renderExternal() {
   if (!snap) { s.snapshotId = null; renderExternal(); return; }
 
   const products = snap.products;
+  // Compare snapshot (optional)
+  const cmpSnap = s.compareId ? snapshots.find(x => x.id === s.compareId) : null;
+  const cmpProducts = cmpSnap ? cmpSnap.products : null;
+  const cmpBanner = cmpSnap ? ` &nbsp;<span class="badge" style="background:#fff3e0;color:#e65100">vs ${cmpSnap.label}</span>` : '';
   document.getElementById('external-mode-banner').innerHTML =
-    `<strong>${snap.label}</strong> · ${products.length.toLocaleString()} line items · uploaded ${new Date(snap.uploadedAt).toLocaleDateString()}
+    `<strong>${snap.label}</strong> · ${products.length.toLocaleString()} line items · uploaded ${new Date(snap.uploadedAt).toLocaleDateString()}${cmpBanner}
      &nbsp; <span class="small">Market signal — never summed with your Amazon/Shopify totals.</span>`;
 
   // Store aggregation
   const byStore = aggregateExternalByStore(products, s.groupByParent);
-  renderExternalSummaryCards(byStore, products);
-  renderExternalFocusCards(byStore);
+  const cmpByStore = cmpProducts ? aggregateExternalByStore(cmpProducts, s.groupByParent) : null;
+  renderExternalSummaryCards(byStore, products, cmpByStore, cmpProducts);
+  renderExternalFocusCards(byStore, cmpByStore);
   renderExternalOtherStores(byStore);
   renderExternalStoreFilter(byStore);
 
   // Filter products by chosen store
-  let filteredProducts = products;
+  let filteredProducts = products, cmpFilteredProducts = cmpProducts;
   if (s.storeFilter && s.storeFilter !== 'all') {
     filteredProducts = products.filter(p =>
       s.groupByParent ? p.store === s.storeFilter : p.rawStore === s.storeFilter);
+    if (cmpProducts) cmpFilteredProducts = cmpProducts.filter(p =>
+      s.groupByParent ? p.store === s.storeFilter : p.rawStore === s.storeFilter);
   }
   const genera = aggregateExternalByGenus(filteredProducts);
+  const cmpGenera = cmpFilteredProducts ? aggregateExternalByGenus(cmpFilteredProducts) : null;
   renderExternalChart(genera);
-  renderExternalGenusTable(genera);
+  renderExternalGenusTable(genera, cmpGenera);
   renderExternalTopPlants(filteredProducts);
   renderExternalInsights(snap, byStore, genera);
   if (s.drillGenus) renderExternalDrill(s.drillGenus, genera);
 }
 
-function renderExternalSummaryCards(byStore, products) {
+// Small helper to render a colored Δ badge between current and prior values.
+function fmtDelta(cur, prior, fmt) {
+  if (prior == null) return '';
+  const d = cur - prior;
+  if (!prior && !cur) return '';
+  const pct = prior ? (d / prior * 100) : (cur ? 100 : 0);
+  const cls = d > 0 ? 'delta-up' : d < 0 ? 'delta-down' : 'delta-flat';
+  const arrow = d > 0 ? '▲' : d < 0 ? '▼' : '—';
+  const sign = d > 0 ? '+' : '';
+  const abs = fmt ? fmt(Math.abs(d)) : Math.abs(d).toLocaleString();
+  const pctTxt = isFinite(pct) ? (sign + pct.toFixed(1) + '%') : '';
+  return ` <span class="delta ${cls}" style="font-size:11px;font-weight:600;color:${d>0?'#2e7d32':d<0?'#c62828':'#666'}">${arrow} ${pctTxt} <span style="opacity:.7">(${sign}${abs})</span></span>`;
+}
+
+function renderExternalSummaryCards(byStore, products, cmpByStore, cmpProducts) {
   const totalRev = byStore.reduce((a, s) => a + s.rev, 0);
   const totalUnits = byStore.reduce((a, s) => a + s.units, 0);
   const totalOrders = byStore.reduce((a, s) => a + s.orders, 0);
   const genera = new Set(products.map(p => p.genus).filter(g => g && g !== '(no genus)')).size;
+  let priorRev = null, priorUnits = null, priorOrders = null, priorStores = null, priorGenera = null;
+  if (cmpByStore) {
+    priorRev    = cmpByStore.reduce((a, s) => a + s.rev, 0);
+    priorUnits  = cmpByStore.reduce((a, s) => a + s.units, 0);
+    priorOrders = cmpByStore.reduce((a, s) => a + s.orders, 0);
+    priorStores = cmpByStore.length;
+    priorGenera = new Set(cmpProducts.map(p => p.genus).filter(g => g && g !== '(no genus)')).size;
+  }
   const cards = [
-    {label: 'Market revenue (est.)', value: fmt$(totalRev), sub: '<span class="small">not your revenue</span>'},
-    {label: 'Units observed', value: fmtN(totalUnits)},
-    {label: 'Orders observed', value: fmtN(totalOrders)},
-    {label: 'External stores', value: fmtN(byStore.length)},
-    {label: 'Plant genera', value: fmtN(genera)}
+    {label: 'Market revenue (est.)', value: fmt$(totalRev), delta: fmtDelta(totalRev, priorRev, fmt$),
+       sub: '<span class="small">not your revenue</span>'},
+    {label: 'Units observed',  value: fmtN(totalUnits),  delta: fmtDelta(totalUnits,  priorUnits,  fmtN)},
+    {label: 'Orders observed', value: fmtN(totalOrders), delta: fmtDelta(totalOrders, priorOrders, fmtN)},
+    {label: 'External stores', value: fmtN(byStore.length), delta: fmtDelta(byStore.length, priorStores, fmtN)},
+    {label: 'Plant genera',    value: fmtN(genera),      delta: fmtDelta(genera, priorGenera, fmtN)}
   ];
   document.getElementById('external-summary-cards').innerHTML = cards.map(c =>
-    `<div class="card"><div class="label">${c.label}</div><div class="value">${c.value}</div>${c.sub ? `<div class="sub">${c.sub}</div>` : ''}</div>`).join('');
+    `<div class="card"><div class="label">${c.label}</div><div class="value">${c.value}</div>${c.delta || ''}${c.sub ? `<div class="sub">${c.sub}</div>` : ''}</div>`).join('');
 }
 
-function renderExternalFocusCards(byStore) {
+function renderExternalFocusCards(byStore, cmpByStore) {
   const focus = byStore.filter(s => EXTERNAL_FOCUS_STORES.some(f => s.store.includes(f) || f.includes(s.store)));
   const container = document.getElementById('external-focus-cards');
   if (!focus.length) {
     container.innerHTML = '<div class="small">No focus stores found in this file. All external stores shown below.</div>';
     return;
   }
-  // Also surface MCG's Amazon store as its own callout — even in grouped mode
+  const cmpMap = {};
+  if (cmpByStore) cmpByStore.forEach(s => { cmpMap[s.store] = s; });
   const snap = snapshots.find(x => x.id === state.external.snapshotId);
   let extraCards = '';
   if (snap && state.external.groupByParent) {
@@ -2221,13 +2253,12 @@ function renderExternalFocusCards(byStore) {
     if (mcgAmazonProducts.length) {
       const mcgAmazon = aggregateExternalByStore(mcgAmazonProducts, false)[0];
       if (mcgAmazon) {
-        // Rename for the card so it reads as a sub-brand callout
         mcgAmazon.store = 'MCG Amazon (breakdown)';
         extraCards = renderStoreCard(mcgAmazon, false);
       }
     }
   }
-  container.innerHTML = focus.map(s => renderStoreCard(s, true)).join('') + extraCards;
+  container.innerHTML = focus.map(s => renderStoreCard(s, true, cmpMap[s.store])).join('') + extraCards;
 }
 
 function renderExternalOtherStores(byStore) {
@@ -2239,17 +2270,21 @@ function renderExternalOtherStores(byStore) {
   document.getElementById('external-other-cards').innerHTML = other.map(s => renderStoreCard(s, false)).join('');
 }
 
-function renderStoreCard(s, isFocus) {
+function renderStoreCard(s, isFocus, prior) {
   const genera = aggregateExternalByGenus(s.products);
   const topGenera = genera.filter(g => g.genus !== '(no genus)').slice(0, 3);
   const topGeneraTxt = topGenera.map(g => `${g.genus} (${g.units})`).join(', ') || '—';
+  const dRev = prior ? fmtDelta(s.rev, prior.rev, fmt$) : '';
+  const dOrd = prior ? fmtDelta(s.orders, prior.orders, fmtN) : '';
+  const dUn  = prior ? fmtDelta(s.units, prior.units, fmtN) : '';
+  const dAov = prior ? fmtDelta(s.aov, prior.aov, fmt$) : '';
   return `<div class="card store-card ${isFocus ? 'focus' : ''}">
     <div style="font-weight:600;font-size:14px;color:#e65100;margin-bottom:6px">${s.store}</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px">
-      <div><div class="small">Revenue</div><div style="font-weight:600">${fmt$(s.rev)}</div></div>
-      <div><div class="small">Orders</div><div style="font-weight:600">${fmtN(s.orders)}</div></div>
-      <div><div class="small">Units</div><div style="font-weight:600">${fmtN(s.units)}</div></div>
-      <div><div class="small">AOV</div><div style="font-weight:600">${fmt$(s.aov)}</div></div>
+      <div><div class="small">Revenue</div><div style="font-weight:600">${fmt$(s.rev)}</div>${dRev}</div>
+      <div><div class="small">Orders</div><div style="font-weight:600">${fmtN(s.orders)}</div>${dOrd}</div>
+      <div><div class="small">Units</div><div style="font-weight:600">${fmtN(s.units)}</div>${dUn}</div>
+      <div><div class="small">AOV</div><div style="font-weight:600">${fmt$(s.aov)}</div>${dAov}</div>
     </div>
     <div class="small" style="margin-top:8px"><strong>Top:</strong> ${topGeneraTxt}</div>
   </div>`;
@@ -2279,11 +2314,14 @@ function renderExternalChart(genera) {
   });
 }
 
-function renderExternalGenusTable(genera) {
+function renderExternalGenusTable(genera, cmpGenera) {
   const search = (document.getElementById('external-genus-search').value || '').toLowerCase();
   const items = genera.filter(g =>
     (showNonPlant || g.genus !== '(no genus)') &&
     (!search || g.genus.toLowerCase().includes(search)));
+  const cmpMap = {};
+  if (cmpGenera) cmpGenera.forEach(g => { cmpMap[g.genus] = g; });
+  const hasCmp = !!cmpGenera;
   const cols = [
     {key: 'genus', label: 'Genus'},
     {key: 'type', label: 'Type'},
@@ -2292,12 +2330,27 @@ function renderExternalGenusTable(genera) {
     {key: 'orders', label: 'Orders', num: true, fmt: fmtN},
     {key: 'skus', label: 'SKUs', num: true, fmt: fmtN}
   ];
+  if (hasCmp) {
+    cols.splice(3, 0, {key: 'unitsDelta', label: 'Δ units', num: true});
+    cols.push({key: 'revDelta', label: 'Δ revenue', num: true});
+  }
   const ss = state.genusSort.external;
+  if (ss.col >= cols.length) { ss.col = 0; ss.dir = 'desc'; }
   const sorted = [...items].sort((a, b) => {
     const kv = cols[ss.col].key, dir = ss.dir === 'asc' ? 1 : -1;
     if (kv === 'type') {
       const at = getType(a.genus) || '', bt = getType(b.genus) || '';
       return at.localeCompare(bt) * dir;
+    }
+    if (kv === 'unitsDelta') {
+      const av = a.units - (cmpMap[a.genus]?.units || 0);
+      const bv = b.units - (cmpMap[b.genus]?.units || 0);
+      return (av > bv ? 1 : av < bv ? -1 : 0) * dir;
+    }
+    if (kv === 'revDelta') {
+      const av = a.estRev - (cmpMap[a.genus]?.estRev || 0);
+      const bv = b.estRev - (cmpMap[b.genus]?.estRev || 0);
+      return (av > bv ? 1 : av < bv ? -1 : 0) * dir;
     }
     return (a[kv] > b[kv] ? 1 : a[kv] < b[kv] ? -1 : 0) * dir;
   });
@@ -2306,8 +2359,11 @@ function renderExternalGenusTable(genera) {
   document.getElementById('external-genus-tbody').innerHTML = sorted.map(g => {
     const t = getType(g.genus);
     const typeCell = t ? `<span class="badge type-${t.toLowerCase().replace(/\s/g,'')}">${t}</span>` : '';
+    const prior = cmpMap[g.genus];
     return `<tr class="clickable" data-drill-genus="${g.genus}">${cols.map(c => {
       if (c.key === 'type') return `<td>${typeCell}</td>`;
+      if (c.key === 'unitsDelta') return `<td class="num">${fmtDelta(g.units, prior ? prior.units : 0, fmtN)}</td>`;
+      if (c.key === 'revDelta')   return `<td class="num">${fmtDelta(g.estRev, prior ? prior.estRev : 0, fmt$)}</td>`;
       return `<td class="${c.num ? 'num' : ''}">${c.fmt ? c.fmt(g[c.key]) : g[c.key]}</td>`;
     }).join('')}</tr>`;
   }).join('');
