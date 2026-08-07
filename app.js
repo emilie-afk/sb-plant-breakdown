@@ -4,6 +4,24 @@
 const STORAGE_KEY = "sb-analyzer-snapshots-v1";
 const STORAGE_KEY_LZ = STORAGE_KEY + "-lz";
 let snapshots = loadSnapshots();
+// Re-run the genus classifier over stored snapshots so new categories
+// (e.g. Bundle, Subscription) propagate without requiring re-upload.
+// Runs once per session — cheap even with tens of thousands of line items.
+(function reclassifyGenusOnLoad() {
+  if (typeof detectGenus !== "function") return;
+  let touched = 0;
+  for (const snap of snapshots) {
+    if (!snap || !Array.isArray(snap.products)) continue;
+    for (const p of snap.products) {
+      const newGenus = detectGenus(p.title) || "(no genus)";
+      if (newGenus !== p.genus) { p.genus = newGenus; touched++; }
+    }
+  }
+  if (touched > 0) {
+    console.log("Reclassified " + touched + " products with updated genus detector.");
+    try { saveSnapshots(); } catch(e) { console.warn("reclassify save failed", e); }
+  }
+})();
 let activeTab = "amazon";
 let state = {
   topPlants: {amazon: {threshold: 500, sortCol: null, sortDir: "desc"}, shopify: {threshold: 500, sortCol: null, sortDir: "desc"}},
