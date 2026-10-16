@@ -214,6 +214,40 @@ export function validateProductReport(payload) {
     }
   }
 
+  // When the export was produced. A collection time is not the sales period;
+  // it decides whether the period was over (complete) or still running (partial).
+  let collectedAt = null;
+  if (payload.collectedAt != null) {
+    const t = Date.parse(String(payload.collectedAt));
+    if (!Number.isFinite(t)) err("bad_collected_at", "collectedAt must be an ISO date-time.");
+    else if (t > Date.now() + 10 * 60000) err("bad_collected_at", "collectedAt is in the future.");
+    else collectedAt = new Date(t).toISOString();
+  }
+
+  // Included / excluded split, when the importer computed one. It must add up
+  // to the report totals exactly, or it is refused rather than stored wrong.
+  let split = null;
+  if (payload.includedTotals != null || payload.excludedTotals != null) {
+    const inc = payload.includedTotals, exc = payload.excludedTotals;
+    if (!isPlainObject(inc) || !isPlainObject(exc)) err("bad_split", "includedTotals and excludedTotals must both be objects.");
+    else {
+      const pickT = (o) => Object.fromEntries(MEASURES.map(k => [k, k === "units" ? Math.round(Number(o[k]) || 0) : r2(Number(o[k]) || 0)]));
+      const a = pickT(inc), b = pickT(exc);
+      for (const k of MEASURES) {
+        if (!Number.isFinite(Number(inc[k] == null ? 0 : inc[k])) || !Number.isFinite(Number(exc[k] == null ? 0 : exc[k]))) {
+          err("bad_split", "includedTotals/excludedTotals." + k + " is not a number."); break;
+        }
+        const tol = k === "units" ? 0 : 0.02;
+        if (normRows.length && Math.abs(r2(a[k] + b[k]) - r2(sums[k])) > tol) {
+          err("split_mismatch", "Included + excluded " + k + " does not equal the report total."); break;
+        }
+      }
+      const labels = Array.isArray(payload.exclusionLabels)
+        ? payload.exclusionLabels.slice(0, 30).map(x => String(x).slice(0, 120)) : [];
+      split = { included: a, excluded: b, labels };
+    }
+  }
+
   if (errors.length) return { ok: false, errors, warnings, normalized: null };
 
   const reportKey = [source, scope, start, end].join(":");
@@ -228,6 +262,9 @@ export function validateProductReport(payload) {
       comparison,
       timezone, currency,
       sourceFilename: payload.sourceFilename ? String(payload.sourceFilename).slice(0, 300) : null,
+      collectedAt,
+      completeness: completenessFor(start, end, collectedAt, timezone),
+      split,
       importedBy,
       client: payload.client ? String(payload.client).slice(0, 120) : null,
       rows: normRows,
@@ -250,6 +287,27 @@ export function validateProductReport(payload) {
       })
     }
   };
+}
+
+// The calendar date in the store's timezone at a moment (default: now).
+export function storeDate(at, timezone) {
+  const d = at ? new Date(at) : new Date();
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: timezone || "UTC", year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+  } catch (e) {
+    return d.toISOString().slice(0, 10);
+  }
+}
+// 'complete' when the reporting period had ended, in the store's timezone, at
+// the moment the export was produced, and it is not a month-to-date slice of
+// a month (Oct 1–15 is partial even once Oct 15 is over); otherwise 'partial'.
+export function completenessFor(periodStart, periodEnd, collectedAt, timezone) {
+  if (periodStart && periodStart.slice(8, 10) === "01" && periodStart.slice(0, 7) === periodEnd.slice(0, 7)) {
+    const y = +periodEnd.slice(0, 4), m = +periodEnd.slice(5, 7);
+    const monthEnd = periodEnd.slice(0, 8) + String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, "0");
+    if (periodEnd < monthEnd) return "partial";
+  }
+  return storeDate(collectedAt, timezone) > periodEnd ? "complete" : "partial";
 }
 
 const SOURCE_CAP_KEYS = {

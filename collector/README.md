@@ -15,10 +15,11 @@ No Shopify API, no custom app and no Make.com: it uses the same report screen a 
 ## What a run does
 
 1. **Choose the periods.** It works out which periods to collect from the **America/Los_Angeles** calendar, whatever the PC's own time zone:
-   - every run: month-to-date (the 1st through yesterday);
-   - on the 2nd of each month: also the previous full month.
+   - **every run:** month-to-date (the 1st through yesterday), labelled partial in the dashboard;
+   - **closed months** (`periods.closedMonths`): on the listed days of the month, the last `lookback` full months are collected again, so refunds and corrections made after month end are kept. An unchanged month writes nothing; a changed one becomes a new revision and the earlier revision stays in the history;
+   - **backfill** (`periods.backfill`): up to `maxPerRun` full months missing from shared storage, newest first, back to `earliest`. When Shopify returns no data for a month, backfill stops there and remembers it (`backfill-state.json`), so it never keeps asking for history that does not exist.
 
-   Both are configurable under `periods`.
+   All of this is configurable; the values in `config.example.json` are a proposal. Older configs with `monthlyOnDay` keep working (the previous month, on that day).
 2. **Open the saved report.** It loads the report with that period's dates and *compare to previous period*. It never clicks **Save**, so the saved report is unchanged.
 3. **Read the page totals.** It reads the **Summary** row off the page (units and net sales).
 4. **Export.** It exports **CSV, All results** (more than 1,000 product × channel rows is normal).
@@ -31,6 +32,8 @@ No Shopify API, no custom app and no Make.com: it uses the same report screen a 
 6. **Upload.** It uploads to `POST /v1/ingest/product-report` with the ingest key.
    - Re-uploading an unchanged report writes nothing.
    - A refused or failed upload keeps the CSV in `quarantine\` for 14 days, for a retry with `--from-file`.
+   - The payload carries the collection time and the included / excluded totals, so the dashboard can show when the data was fetched separately from the sales period.
+7. **Report failures.** When a period cannot be stored (sign-in needed, export failed, file refused by the checks), the collector sends a short failure record to `POST /v1/ingest/collection-failure`. The dashboard shows it above the analysis; the last successful report stays on screen.
 
 ## One-time setup (on the PC that will run it)
 
@@ -74,11 +77,14 @@ npm run collect
 .\windows\install-task.ps1                  # shows the proposed task, changes nothing
 .\windows\install-task.ps1 -At 16:00 -Apply # installs it: daily at 16:00 local PC time
 .\windows\install-task.ps1 -Uninstall
+.\windows\check-task.ps1                  # read-only: state, next run, last result, scheduled or manual
 ```
+
+`check-task.ps1` counts the last run as a **verified scheduled run** only when it started within 10 minutes after the trigger time, finished with result 0 and `run-task.ps1` logged collector exit 0. A collector run started by hand (`npm run collect`) never goes through the task; a task started by hand ("Run" in Task Scheduler) is reported as manual.
 
 - **Choosing the time.** Pick a local time at least an hour after midnight in Los Angeles: for example 16:00 or later at UTC+7, or 07:15 Pacific time.
 - **What runs.** The task runs `windows\run-task.ps1` as the signed-in user. Logs go to `%LOCALAPPDATA%\sb-plant-breakdown-collector\logs` and are kept for 90 days.
-- **If Shopify asks for a sign-in.** If the session expires or Shopify asks for 2FA, the run waits up to `signInWaitMinutes` (default 30) in the open window for a person, and otherwise stops with exit 20. The dashboard's Data & imports tab then shows the failed import, and the last good report stays in place.
+- **If Shopify asks for a sign-in.** If the session expires or Shopify asks for 2FA, the run waits up to `signInWaitMinutes` (default 30) in the open window for a person, and otherwise stops with exit 20. The dashboard shows the failed collection above the analysis, and the last good report stays in place.
 
 ## Exit codes
 

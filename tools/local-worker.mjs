@@ -63,6 +63,8 @@ const env = {
   DB,
   INGEST_SECRET: process.env.LOCAL_INGEST_SECRET,
   DASHBOARD_SECRET: process.env.LOCAL_DASHBOARD_SECRET,
+  // optional read-only key, like the Worker's VIEWER_SECRET
+  VIEWER_SECRET: process.env.LOCAL_VIEWER_SECRET && process.env.LOCAL_VIEWER_SECRET.length >= 32 ? process.env.LOCAL_VIEWER_SECRET : undefined,
   ALLOWED_ORIGINS: ORIGIN
 };
 

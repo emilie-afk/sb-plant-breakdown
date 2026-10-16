@@ -64,21 +64,42 @@ export async function activeReportsFor(db, source, scope) {
        FROM reports WHERE source = ? AND report_scope = ? AND status = 'active'`
   ).bind(source, scope).all()).results || [];
 }
-export async function listReports(db, { source } = {}) {
+// Active reports by default. With `history`, every stored revision of every
+// period (active and superseded), newest revision first, so earlier revisions
+// stay available for inspection and download. Staging and abandoned attempts
+// never appear: they were never a successful import.
+export async function listReports(db, { source, history } = {}) {
+  const statuses = history ? "status IN ('active', 'superseded')" : "status = 'active'";
   const sql = `SELECT id, report_key, source, report_scope, period_start, period_end,
                  comparison_start, comparison_end, comparison_source, timezone, currency,
                  source_filename, content_hash, row_count, has_product_id, totals_json,
-                 prior_totals_json, capabilities_json, revision, imported_at, imported_by
-               FROM reports WHERE status = 'active' ${source ? "AND source = ?" : ""}
-               ORDER BY period_end DESC, period_start DESC`;
+                 prior_totals_json, capabilities_json, revision, status, superseded_by,
+                 imported_at, imported_by, collected_at, activated_at, confirmed_at, completeness,
+                 included_totals_json, excluded_totals_json, exclusion_labels_json
+               FROM reports WHERE ${statuses} ${source ? "AND source = ?" : ""}
+               ORDER BY period_end DESC, period_start DESC, revision DESC`;
   const q = source ? db.prepare(sql).bind(source) : db.prepare(sql);
+  const parse = (v) => v ? JSON.parse(v) : null;
   return ((await q.all()).results || []).map(r => ({
     ...r,
     totals: JSON.parse(r.totals_json),
-    priorTotals: r.prior_totals_json ? JSON.parse(r.prior_totals_json) : null,
+    priorTotals: parse(r.prior_totals_json),
     capabilities: JSON.parse(r.capabilities_json),
-    totals_json: undefined, prior_totals_json: undefined, capabilities_json: undefined
+    includedTotals: parse(r.included_totals_json),
+    excludedTotals: parse(r.excluded_totals_json),
+    exclusionLabels: parse(r.exclusion_labels_json),
+    totals_json: undefined, prior_totals_json: undefined, capabilities_json: undefined,
+    included_totals_json: undefined, excluded_totals_json: undefined, exclusion_labels_json: undefined
   }));
+}
+// What periods are stored, without any row data. The collector may read this
+// (to find months to backfill); it reveals dates and revision numbers only.
+export async function coverage(db, { source, scope }) {
+  return (await db.prepare(
+    `SELECT period_start, period_end, revision, completeness, collected_at
+       FROM reports WHERE status = 'active' AND source = ? AND report_scope = ?
+       ORDER BY period_start`
+  ).bind(source, scope).all()).results || [];
 }
 export async function reportRows(db, reportId, { offset = 0, limit = 5000 } = {}) {
   const rep = await db.prepare(`SELECT id, status FROM reports WHERE id = ?`).bind(reportId).first();
@@ -126,7 +147,14 @@ function rowValues(reportId, r) {
 export async function storeReport(db, n, hash) {
   const current = await activeReport(db, n.reportKey);
   if (current && current.content_hash === hash) {
-    return { outcome: "unchanged", reportId: current.id, revision: current.revision, overlaps: [] };
+    // An identical retry writes no new revision. It only records that the
+    // data was confirmed, and if the period has since ended, that the same
+    // figures are now known to be the complete period.
+    const upgrade = current.completeness !== "complete" && n.completeness === "complete";
+    await db.prepare(
+      `UPDATE reports SET confirmed_at = ?${upgrade ? ", completeness = 'complete', collected_at = ?" : ""} WHERE id = ?`
+    ).bind(...(upgrade ? [nowIso(), n.collectedAt || nowIso(), current.id] : [nowIso(), current.id])).run();
+    return { outcome: "unchanged", reportId: current.id, revision: current.revision, overlaps: [], markedComplete: upgrade };
   }
   // The next revision number counts abandoned attempts too, so a retry after a
   // failure never collides with the id of the attempt that failed.
@@ -148,14 +176,17 @@ export async function storeReport(db, n, hash) {
     `INSERT INTO reports (id, report_key, source, report_scope, period_start, period_end,
        comparison_start, comparison_end, comparison_source, timezone, currency, source_filename,
        content_hash, row_count, has_product_id, totals_json, prior_totals_json, capabilities_json,
-       revision, status, imported_at, imported_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'staging', ?, ?)`
+       revision, status, imported_at, imported_by, collected_at, completeness,
+       included_totals_json, excluded_totals_json, exclusion_labels_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'staging', ?, ?, ?, ?, ?, ?, ?)`
   ).bind(id, n.reportKey, n.source, n.reportScope, n.period.start, n.period.end,
          n.comparison ? n.comparison.start : null, n.comparison ? n.comparison.end : null,
          n.comparison ? n.comparison.source : null, n.timezone, n.currency, n.sourceFilename,
          hash, n.rowCount, n.capabilities.hasProductId ? 1 : 0, JSON.stringify(n.totals),
          n.priorTotals ? JSON.stringify(n.priorTotals) : null, JSON.stringify(n.capabilities),
-         revision, stamp, n.importedBy).run();
+         revision, stamp, n.importedBy, n.collectedAt || stamp, n.completeness || "partial",
+         n.split ? JSON.stringify(n.split.included) : null, n.split ? JSON.stringify(n.split.excluded) : null,
+         n.split ? JSON.stringify(n.split.labels) : null).run();
 
   try {
     // 2. rows, in small batches
@@ -180,7 +211,7 @@ export async function storeReport(db, n, hash) {
     if (current) {
       flip.push(db.prepare(`UPDATE reports SET status = 'superseded', superseded_by = ? WHERE id = ?`).bind(id, current.id));
     }
-    flip.push(db.prepare(`UPDATE reports SET status = 'active' WHERE id = ?`).bind(id));
+    flip.push(db.prepare(`UPDATE reports SET status = 'active', activated_at = ? WHERE id = ?`).bind(nowIso(), id));
     await db.batch(flip);
   } catch (e) {
     try {

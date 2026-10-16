@@ -7,15 +7,22 @@
 //   --from-file X     skip the browser and use an export already on disk
 //                     (needs one period; used for retries from quarantine)
 //   --headless        run without a window (Shopify may then show a human check)
+//   --no-backfill     skip historical months this run
+//
+// A scheduled run collects month-to-date, re-collects recently closed months
+// on the configured days (periods.closedMonths), and fills up to
+// periods.backfill.maxPerRun missing historical months (periods.backfill),
+// newest first. Failures are reported to the Worker so the dashboard shows them.
 //
 // Exit code: 0 ok, otherwise the first failure (see EXIT in lib.mjs).
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { EXIT, validateConfig, periodsForToday, planPeriods, customPeriod, reportUrl, validateExport, runId as makeRunId } from './lib.mjs';
+import { EXIT, validateConfig, periodsForToday, planPeriods, customPeriod, reportUrl, validateExport, runId as makeRunId,
+         backfillPlan, failureCodeFor } from './lib.mjs';
 import { scrub, safeError, containsSecret } from './redact.mjs';
-import { uploadReport } from './upload.mjs';
+import { uploadReport, reportFailure, fetchCoverage } from './upload.mjs';
 
 function arg(name) { const i = process.argv.indexOf('--' + name); return i > 0 ? process.argv[i + 1] : null; }
 const flag = name => process.argv.includes('--' + name);
@@ -30,12 +37,14 @@ export async function main() {
   if (cfgErrs.length) { console.error(cfgErrs.join('\n')); return EXIT.CONFIG; }
 
   let periods;
+  const scheduled = !(arg('start') || arg('end') || arg('period') || arg('from-file'));
   try {
     if (arg('start') || arg('end')) periods = [customPeriod(arg('start'), arg('end'))];
     else if (arg('period')) periods = planPeriods(arg('period').split(','), new Date(), cfg.timeZone);
     else periods = periodsForToday(cfg, new Date());
   } catch (e) { console.error(safeError(e)); return EXIT.CONFIG; }
-  if (!periods.length) { log('Nothing to collect today.'); return EXIT.OK; }
+  const wantBackfill = scheduled && !flag('no-backfill') && !flag('dry-run') && cfg.periods && cfg.periods.backfill;
+  if (!periods.length && !wantBackfill) { log('Nothing to collect today.'); return EXIT.OK; }
   const fromFile = arg('from-file');
   if (fromFile && periods.length !== 1) { console.error('--from-file needs exactly one period.'); return EXIT.CONFIG; }
   const dryRun = flag('dry-run');
@@ -62,7 +71,25 @@ export async function main() {
       try { secret = ingestSecret(cfg); }
       catch (e) { console.error(safeError(e)); return EXIT.CONFIG; }
     }
+    // Historical months missing from shared storage, where Shopify has data.
+    const statePath = path.join(paths.base, 'backfill-state.json');
+    let bstate = {};
+    try { bstate = JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch { bstate = {}; }
+    if (wantBackfill) {
+      try {
+        const cov = await fetchCoverage({ workerUrl: cfg.workerUrl, secret });
+        const extra = backfillPlan(cov, {
+          earliest: cfg.periods.backfill.earliest, maxPerRun: cfg.periods.backfill.maxPerRun ?? 2,
+          tz: cfg.timeZone, noDataBefore: bstate.noDataBefore || null, skip: periods.map(p => p.start.slice(0, 7))
+        });
+        if (extra.length) log('Backfill: ' + extra.map(p => p.start.slice(0, 7)).join(', '));
+        periods = periods.concat(extra);
+      } catch (e) { log('Backfill skipped: ' + safeError(e)); }
+    }
+    if (!periods.length) { log('Nothing to collect today.'); return EXIT.OK; }
+    let backfillStopped = false;
     for (const period of periods) {
+      if (period.kind === 'backfill' && backfillStopped) continue;
       const rid = makeRunId();
       const rec = { runId: rid, kind: 'shopify_total_sales_by_product', period: { start: period.start, end: period.end, kind: period.kind },
                     comparison: period.comparison, startedAt: new Date().toISOString(), dryRun, status: 'started' };
@@ -80,8 +107,17 @@ export async function main() {
           rec.download = { via: 'browser', bytes: Buffer.byteLength(text) };
           rec.pageTotals = pageTotals;
         }
-        const v = validateExport(text, period, { pageTotals, timeZone: cfg.timeZone, currency: cfg.currency, client: os.hostname() });
-        if (!v.ok) {
+        const v = validateExport(text, period, { pageTotals, timeZone: cfg.timeZone, currency: cfg.currency, client: os.hostname(),
+                                                 collectedAt: new Date().toISOString() });
+        if (!v.ok && period.kind === 'backfill' && v.problems.some(x => /no data rows/i.test(x))) {
+          // Shopify has nothing this far back: stop going earlier, now and on later runs.
+          rec.status = 'no_history';
+          const k = period.start.slice(0, 7); let [yy, mm] = k.split('-').map(Number); mm++; if (mm > 12) { mm = 1; yy++; }
+          bstate.noDataBefore = `${yy}-${String(mm).padStart(2, '0')}`;
+          fs.writeFileSync(statePath, JSON.stringify(bstate));
+          backfillStopped = true;
+          log(`${period.start}..${period.end}: Shopify returned no data; history starts after this month. Backfill stops here.`);
+        } else if (!v.ok) {
           code = EXIT.VALIDATION_FAILED; rec.status = 'validation_failed'; rec.problems = v.problems;
           log(`${period.start}..${period.end}: refused before upload: ${v.problems.join(' ')}`);
         } else {
@@ -111,6 +147,12 @@ export async function main() {
         log(`${period.start}..${period.end}: ${rec.status}${rec.error ? ' — ' + rec.error : ''}`);
       }
       rec.exitCode = code; rec.finishedAt = new Date().toISOString();
+      // Tell the dashboard (via the Worker) when a run could not store anything.
+      if (code !== EXIT.OK && !dryRun && secret && failureCodeFor(code) && code !== EXIT.UPLOAD_FAILED) {
+        const msg = scrub([rec.status, (rec.problems || []).join(' '), rec.error || ''].filter(Boolean).join(': '));
+        rec.failureReported = await reportFailure({ period: { start: period.start, end: period.end }, errorCode: failureCodeFor(code),
+                                                    message: msg, client: os.hostname() }, { workerUrl: cfg.workerUrl, secret });
+      }
       writeRunRecord(paths.runs, rec);
       if (code !== EXIT.OK && worst === EXIT.OK) worst = code;
       if (browser && browser.code) break; // sign-in problems affect every period

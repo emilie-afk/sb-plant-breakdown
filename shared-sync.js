@@ -68,6 +68,18 @@
         if (rich && p.salesChannel) row.salesChannel = p.salesChannel;
         return row;
       });
+      var extra = {};
+      // Included / excluded split with the dashboard's exclusion rules, when
+      // the grouping module is loaded (it is in the browser and in tests).
+      var PGm = opts.grouping || (root && root.splitExclusions ? root : null);
+      if (rich && PGm && PGm.splitExclusions) {
+        var sp = PGm.splitExclusions(snap.products.map(function (p) { return Object.assign({}, p); }),
+                                     meta.exclusionRules || PGm.DEFAULT_EXCLUSIONS);
+        extra.includedTotals = sumRows(sp.included);
+        extra.excludedTotals = sumRows(sp.excluded);
+        extra.exclusionLabels = sp.excluded.map(function (r) { return r.exclusionLabel; })
+          .filter(function (v, i, a) { return a.indexOf(v) === i; });
+      }
       return { ok: true, payload: Object.assign(base, {
         source: "shopify",
         reportScope: rich ? SHOPIFY_SCOPE : SHOPIFY_LEGACY_SCOPE,
@@ -75,7 +87,7 @@
         sourceCapabilities: meta.capabilities || null,
         totals: sumRows(rows),
         rows: rows
-      }), legacy: !rich };
+      }, extra), legacy: !rich };
     }
 
     if (snap.source === "amazon") {
@@ -237,7 +249,84 @@
     return out;
   }
 
+  // ---- automatic loading -------------------------------------
+  // Dates are the store's calendar dates (America/Los_Angeles), exactly as
+  // the report states them; nothing here converts time zones.
+  function lastDayOfMonth(ymd) {
+    var y = +ymd.slice(0, 4), m = +ymd.slice(5, 7);
+    return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+  }
+  var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function md(ymd) { return MONTHS[+ymd.slice(5, 7) - 1] + " " + (+ymd.slice(8, 10)); }
+
+  // What kind of period a report covers.
+  //   full_month     the 1st to the last day of one month
+  //   month_to_date  the 1st of a month to a day before its end — PARTIAL
+  //   custom         anything else
+  function periodInfo(start, end) {
+    var kind = "custom";
+    if (start && end && start.slice(8, 10) === "01" && start.slice(0, 7) === end.slice(0, 7)) {
+      kind = end === lastDayOfMonth(start) ? "full_month" : "month_to_date";
+    }
+    var year = end ? end.slice(0, 4) : "";
+    var range = start === end ? md(start) + ", " + year
+      : start.slice(0, 7) === end.slice(0, 7) ? md(start) + " – " + (+end.slice(8, 10)) + ", " + year
+      : (start.slice(0, 4) === year ? md(start) : md(start) + ", " + start.slice(0, 4)) + " – " + md(end) + ", " + year;
+    var label = kind === "full_month" ? MONTHS[+start.slice(5, 7) - 1] + " " + year + " (full month)"
+      : kind === "month_to_date" ? range + " · month to date (partial)"
+      : range;
+    return { kind: kind, partial: kind === "month_to_date", label: label, range: range };
+  }
+
+  // The Shopify report the dashboard opens on: the newest proper report
+  // (latest end date; for equal ends, the longer period; then the newest
+  // import). Legacy browser snapshots never become the default. Also returns
+  // the newest full month, for comparison, when it is a different report.
+  function pickCurrent(reports) {
+    var rs = (reports || []).filter(function (r) {
+      return r.source === "shopify" && r.report_scope === SHOPIFY_SCOPE && (!r.status || r.status === "active");
+    });
+    rs.sort(function (a, b) {
+      return b.period_end.localeCompare(a.period_end) || a.period_start.localeCompare(b.period_start) ||
+             String(b.imported_at || "").localeCompare(String(a.imported_at || ""));
+    });
+    var current = rs[0] || null;
+    var fullMonth = rs.filter(function (r) { return periodInfo(r.period_start, r.period_end).kind === "full_month"; })[0] || null;
+    // Older month-to-date reports of the same month are superseded by the
+    // newest one: they overlap it, so they are never shown together or summed.
+    var superseded = current ? rs.filter(function (r) {
+      return r !== current && periodInfo(r.period_start, r.period_end).kind === "month_to_date" &&
+             r.period_start === current.period_start && r.period_end < current.period_end;
+    }).map(function (r) { return r.id; }) : [];
+    return { current: current, fullMonth: fullMonth && fullMonth !== current ? fullMonth : null, superseded: superseded };
+  }
+
+  // Health of the automatic collection, from the Worker's run history.
+  //   lastSuccess   newest collector run that stored or confirmed a report
+  //   failure       newest collector run that failed AFTER the last success
+  //   stale         no successful collection within `staleHours`
+  function collectionStatus(runs, opts) {
+    opts = opts || {};
+    var now = opts.now ? Date.parse(opts.now) : Date.now();
+    var staleHours = opts.staleHours == null ? 30 : opts.staleHours;
+    var col = (runs || []).filter(function (r) { return r.imported_by === "collector" && (!opts.source || r.source === opts.source); })
+      .slice().sort(function (a, b) { return String(b.started_at).localeCompare(String(a.started_at)); });
+    var ok = col.filter(function (r) { return r.outcome === "succeeded" || r.outcome === "unchanged"; })[0] || null;
+    var bad = col.filter(function (r) { return r.outcome === "failed" || r.outcome === "rejected"; })[0] || null;
+    var lastSuccessAt = ok ? (ok.finished_at || ok.started_at) : null;
+    var failure = bad && (!ok || String(bad.started_at) > String(ok.started_at)) ? bad : null;
+    return {
+      lastSuccess: ok, lastSuccessAt: lastSuccessAt,
+      failure: failure, failureAt: failure ? (failure.finished_at || failure.started_at) : null,
+      stale: lastSuccessAt ? (now - Date.parse(lastSuccessAt)) / 3600000 > staleHours : true,
+      neverCollected: !ok
+    };
+  }
+
   return {
+    sharedPeriodInfo: periodInfo,
+    sharedPickCurrent: pickCurrent,
+    sharedCollectionStatus: collectionStatus,
     SHARED_SHOPIFY_SCOPE: SHOPIFY_SCOPE,
     SHARED_SHOPIFY_LEGACY_SCOPE: SHOPIFY_LEGACY_SCOPE,
     sharedPayloadFromSnapshot: payloadFromSnapshot,

@@ -23,11 +23,13 @@ node tools/make-sample-fixtures.mjs   # regenerate the synthetic fixtures
 | `amazon-report.js` | Amazon snapshots in the shared record shape; comparison matched on ASIN, then title. No DOM. |
 | `product-grouping.js` | Classification, overrides, suspicion flags, exclusions, scope, channel filtering and merging, aggregation, pagination. No DOM. |
 | `catalog-join.js` | Conservative join of sales rows to a storefront catalog snapshot. No DOM. |
-| `shared-sync.js` | Conversion between browser snapshots and shared reports; import status. No DOM. |
+| `shared-sync.js` | Conversion between browser snapshots and shared reports; import status; which report opens by default; collection health. No DOM. |
+| `period-engine.js` | Months, quarters and years from one non-overlapping set of monthly reports; coverage, gaps, comparisons, aggregation. No DOM. |
 | `breakdown-ui.js` | Formatting, the percentage convention, data-driven tables, pagination controls, CSV. |
 | `classification-review.js` | The "classifications to review" panel and the override store. |
 | `shopify-views.js`, `amazon-views.js` | Shopify, Vendors and Amazon tabs. |
-| `data-imports-view.js` | Data & imports tab: shared reports, import history, uploads, shared settings. |
+| `data-imports-view.js` | Automatic loading of the latest saved report, the status strip above the analysis, and the ⚙ Data settings panel (connection, report history and downloads, import history, uploads, snapshots, shared settings, troubleshooting). |
+| `period-view.js` | The Month / Quarter / Year selector and comparison choice above the Shopify, Vendors and Amazon analysis. |
 | `channel-guard.js` | Keeps the older cross-channel tabs from counting marketplace orders twice. |
 | `worker/` | Cloudflare Worker + D1: ingest, report history, settings. |
 | `collector/` | Windows collector that exports the saved Shopify report and uploads it. |
@@ -76,6 +78,37 @@ When marketplace orders are synced into Shopify (here through Sellbrite), Shopif
 - **Reports without the channel column.** When the period reaches the configured sync start date (`SHOPIFY_AMAZON_VIA_SHOPIFY_SINCE` in `shopify-report.js`), the dashboard says the report includes marketplace orders and cannot separate them.
 - **The Amazon tab.** It shows the Sellbrite rows of a Shopify report for the same period beside the Seller Central figures, as a cross-check that is never summed.
 
+## Opening the dashboard
+
+- **No file needed.** After the site password, the dashboard connects to shared storage (with the read-only key built into the encrypted page, or a key entered once under Data settings), opens the newest saved Shopify report and shows it.
+- **Status strip.** Above the Shopify and Vendors analysis: the sales period (store dates, month to date marked partial), the report's revision and when it was collected and imported, the last successful collection ("Last updated"), and any collection or refresh failure. A failure never replaces the last successful analysis.
+- **Data settings** (button, not a tab): connection, report history, import history, manual upload (Amazon's normal route, Shopify's fallback), snapshots and backup, catalog notes and troubleshooting.
+
+## Periods: month, quarter, year
+
+| Rule | How |
+|---|---|
+| One report per month | the active (latest successful) revision of the full-month report, otherwise the newest month-to-date report. Older month-to-date copies, superseded revisions, quarter or custom-range reports are kept but never combined. |
+| Quarters and years | Q1 Jan–Mar, Q2 Apr–Jun, Q3 Jul–Sep, Q4 Oct–Dec; built from those monthly reports. The revisions used are listed. |
+| Missing months | missing, never zero: the period is labelled partial and the months are named. |
+| Running periods | month to date, quarter to date, year to date, with the actual coverage dates. |
+| Sums | units, gross sales, discounts, returns, net, taxes, total and glance views are summed. |
+| Derived figures | average per unit = combined net ÷ combined units; conversion = combined units ÷ combined glance views; percentage change from the combined totals. |
+| Products | counted once across the whole period (by product id, otherwise title + vendor + type). |
+| Inventory | point in time: the latest report's figure, with its date; never summed. |
+| Comparison | previous equivalent period, or the same period last year, from stored reports covering the same days. A month-to-date part needs a stored report for exactly the shifted dates. For a single month with no such report, Shopify's own previous-period columns inside that one report are shown, with their dates. Embedded previous-period columns are never added across months. |
+| Filters | vendor, product type, group (genus / category), channel and plant scope apply to the combined period exactly as to one report. |
+
+## The key built into the page
+
+`build.sh` refuses to build unless `SB_SHARED_KEY` is the Worker's **read-only viewer key**. Before inlining, `tools/check-viewer-key.mjs` asks the Worker (without writing anything): a settings write with an empty body must be refused with 403 and a report listing must succeed. The collector key fails the listing; the dashboard key gets 400 instead of 403. After StatiCrypt, the build checks that the output is encrypted and that neither the key nor app code appears in plain text. The unencrypted intermediate file lives only in a temp folder that is always deleted, and `dist/` and `_work/` are git-ignored.
+
+Anyone who knows the site password can unlock the page and extract the viewer key. With it they can read report history, nothing more.
+
+## Report history
+
+Each stored report keeps: source and scope, sales period, timezone and currency, collection time, successful-import time, revision, partial / complete, totals and (when the importer computed them) the included and excluded totals. Re-collecting a period with different figures adds a revision and keeps the earlier one; identical figures write nothing (they only update "last confirmed", and mark the report complete if its period has since ended). Failed imports leave the active revision in place. Every revision can be opened or downloaded as CSV from Data settings → Report history.
+
 ## Known limits of the data sources
 
 **Shopify "Total sales by product":**
@@ -103,9 +136,10 @@ When marketplace orders are synced into Shopify (here through Sellbrite), Shopif
 
 ## Shared storage (`worker/`)
 
-- **Writes.**
-  - The collector key may only add reports.
+- **Keys.**
+  - The collector key may only add reports, record a failed collection and read which periods are stored (dates only).
   - The dashboard key reads, uploads manually and edits shared settings.
+  - The optional viewer key only reads; it is the one built into the encrypted dashboard page.
 - **Re-imports.**
   - A re-upload of identical content is recognised by its content hash and writes nothing.
   - A new upload for the same scope and period is staged, then activated atomically as the next revision.
@@ -125,6 +159,11 @@ See `collector/README.md`. It exports the saved report through the normal report
 | `npx wrangler@3 d1 create sb-plant-breakdown` | **creates** the D1 database |
 | `npx wrangler@3 d1 migrations apply sb-plant-breakdown --remote` | **creates/migrates** the tables |
 | `worker/setup-cloudflare.ps1` | **deploys** the Worker, **generates and replaces** both Worker keys (Cloudflare secrets + Windows Credential Manager), points the local collector config at the Worker |
+| `worker/update-worker.ps1 [-AddOrigin https://…]` | **applies** pending migrations, optionally **adds** a browser origin, **deploys** the Worker, and **creates** the read-only viewer key only if none exists (or re-sets the stored one if the Worker rejects it). Does not rotate the other keys. Ends with `verify-worker.ps1` and exits nonzero if any check fails. |
+| `worker/verify-worker.ps1 -Url https://…` | changes nothing: health ok, `/v1/reports` without a key → 401, the stored viewer key → 200, report-history fields present, viewer writes → 403, collector coverage → 200 |
+| `collector/windows/check-task.ps1` | changes nothing: task state, trigger, next run, last result, and whether the last run was a **verified scheduled run** (started by the trigger, result 0, collector exit 0) or one started by hand |
+| `node tools/acceptance-live.mjs https://<site>` | changes nothing: a fresh visible Chrome, a person types the site password, then automatic checks of auto-load, history, CSV, quarter/year totals, missing months and reload |
+| Netlify env `SB_SHARED_URL`, `SB_SHARED_KEY` | build the Worker address and the **read-only** viewer key into the encrypted page, so browsers load reports without a key |
 | `collector/windows/install-task.ps1 -At HH:mm -Apply` | **installs** the daily scheduled task (without `-Apply` it only prints the proposal; `-Uninstall` removes it) |
 | `collector/windows/run-task.ps1` | what the scheduled task runs: one collection, logged locally |
 | `npm run login` (in `collector/`) | opens a normal browser window for a person to sign in to Shopify once |

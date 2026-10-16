@@ -4,16 +4,21 @@
 // Routes
 //   GET  /v1/health                         no auth
 //   POST /v1/ingest/product-report          INGEST_SECRET (collector) or DASHBOARD_SECRET (manual upload)
-//   GET  /v1/reports?source=shopify         DASHBOARD_SECRET
-//   GET  /v1/reports/:id/rows               DASHBOARD_SECRET
-//   GET  /v1/imports?source=&limit=         DASHBOARD_SECRET
-//   GET  /v1/settings/:key                  DASHBOARD_SECRET
+//   POST /v1/ingest/collection-failure      INGEST_SECRET  {source, reportScope, period, errorCode, message}
+//   GET  /v1/ingest/coverage?source=&scope= INGEST_SECRET  stored periods only (dates, revisions), no rows
+//   GET  /v1/reports?source=shopify         DASHBOARD_SECRET or VIEWER_SECRET   (&history=1: every revision)
+//   GET  /v1/reports/:id/rows               DASHBOARD_SECRET or VIEWER_SECRET
+//   GET  /v1/imports?source=&limit=         DASHBOARD_SECRET or VIEWER_SECRET
+//   GET  /v1/settings/:key                  DASHBOARD_SECRET or VIEWER_SECRET
 //   PUT  /v1/settings/:key                  DASHBOARD_SECRET  {value, baseVersion}
 //
-// Two secrets, set with `wrangler secret put`, never in code or wrangler.toml:
-//   INGEST_SECRET     held by the Windows collector. Can only ADD reports.
-//   DASHBOARD_SECRET  typed once into the dashboard by its user. Reads, shared
-//                     settings, and manual uploads.
+// Secrets, set as Cloudflare secrets, never in code or wrangler.toml:
+//   INGEST_SECRET     held by the Windows collector. Can only ADD reports and
+//                     record a failed collection.
+//   DASHBOARD_SECRET  reads, shared settings, and manual uploads.
+//   VIEWER_SECRET     optional, READ-ONLY. Meant to be built into the
+//                     password-protected dashboard so a browser can load the
+//                     saved reports without anyone typing a key.
 //
 // Product sales reports only. The ingest route refuses any payload carrying a
 // customer-looking field, and no route stores or returns customer data.
@@ -49,6 +54,7 @@ function roleOf(req, env) {
   const t = bearer(req);
   if (env.DASHBOARD_SECRET && safeEqual(t, env.DASHBOARD_SECRET)) return "dashboard";
   if (env.INGEST_SECRET && safeEqual(t, env.INGEST_SECRET)) return "collector";
+  if (env.VIEWER_SECRET && safeEqual(t, env.VIEWER_SECRET)) return "viewer";
   return null;
 }
 
@@ -110,6 +116,7 @@ async function ingest(req, env, role) {
       errorMessage: r.overlaps.length ? "Overlaps " + r.overlaps.map(o => o.id).join(", ") + " (never summed)" : null
     });
     return json({ ok: true, runId, outcome: r.outcome, reportId: r.reportId, revision: r.revision,
+                  completeness: v.normalized.completeness, markedComplete: !!r.markedComplete,
                   overlaps: r.overlaps, warnings: v.warnings });
   } catch (e) {
     await store.finishRun(env.DB, runId, {
@@ -118,6 +125,25 @@ async function ingest(req, env, role) {
     });
     return json({ ok: false, runId, outcome: "failed", error: e.code || "storage_error" }, 500);
   }
+}
+
+const FAILURE_CODES = new Set(["sign_in_needed", "captcha", "unknown_page", "export_failed", "validation_failed", "upload_failed", "other"]);
+async function recordCollectionFailure(req, env) {
+  let b;
+  try { b = await readJson(req); } catch (e) { return { ok: false, error: e.code || "bad_body" }; }
+  if (!b || typeof b !== "object") return { ok: false, error: "bad_body" };
+  const ymd = (v) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
+  const code = FAILURE_CODES.has(b.errorCode) ? b.errorCode : "other";
+  // A short, plain message only: no payloads, no URLs, nothing customer-like.
+  const message = String(b.message == null ? "" : b.message).replace(/https?:\/\/\S+/g, "<url>")
+    .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, "<email>").slice(0, 300);
+  const runId = await store.startRun(env.DB, {
+    source: b.source === "amazon" ? "amazon" : "shopify", reportScope: typeof b.reportScope === "string" ? b.reportScope.slice(0, 80) : null,
+    periodStart: ymd(b.period && b.period.start), periodEnd: ymd(b.period && b.period.end),
+    importedBy: "collector", client: typeof b.client === "string" ? b.client.slice(0, 80) : null
+  });
+  await store.finishRun(env.DB, runId, { outcome: "failed", errorCode: code, errorMessage: message || code });
+  return { ok: true, runId, outcome: "failed" };
 }
 
 export default {
@@ -134,17 +160,40 @@ export default {
 
     try {
       if (req.method === "POST" && url.pathname === "/v1/ingest/product-report") {
+        if (role === "viewer") return reply({ ok: false, error: "forbidden" }, 403);
         const res = await ingest(req, env, role);
         Object.entries(cors).forEach(([k, v]) => res.headers.set(k, v));
         return res;
       }
 
-      // Everything below is dashboard-only. The collector key can add reports
-      // and nothing else.
-      if (role !== "dashboard") return reply({ ok: false, error: "forbidden" }, 403);
+      // The collector reports a run that failed BEFORE it had a file to upload
+      // (Shopify sign-in needed, export page failed, file refused by its own
+      // checks), so the dashboard can say so. Nothing else is written.
+      if (req.method === "POST" && url.pathname === "/v1/ingest/collection-failure") {
+        if (role !== "collector") return reply({ ok: false, error: "forbidden" }, 403);
+        return reply(await recordCollectionFailure(req, env));
+      }
+
+      // Which periods are already stored, so the collector can backfill gaps
+      // and refresh recent months. Dates and revision numbers only.
+      if (req.method === "GET" && url.pathname === "/v1/ingest/coverage") {
+        if (role !== "collector" && role !== "dashboard") return reply({ ok: false, error: "forbidden" }, 403);
+        return reply({ ok: true, coverage: await store.coverage(env.DB, {
+          source: url.searchParams.get("source") || "shopify",
+          scope: url.searchParams.get("scope") || "total_sales_by_product"
+        }) });
+      }
+
+      // Everything below reads data, or (PUT settings) is dashboard-only. The
+      // collector key can add reports and nothing else.
+      if (role === "collector") return reply({ ok: false, error: "forbidden" }, 403);
+      const readOnly = req.method === "GET";
+      if (!readOnly && role !== "dashboard") return reply({ ok: false, error: "forbidden" }, 403);
 
       if (req.method === "GET" && url.pathname === "/v1/reports") {
-        return reply({ ok: true, reports: await store.listReports(env.DB, { source: url.searchParams.get("source") || null }) });
+        return reply({ ok: true, reports: await store.listReports(env.DB, {
+          source: url.searchParams.get("source") || null, history: url.searchParams.get("history") === "1"
+        }) });
       }
       let m = /^\/v1\/reports\/([^/]+)\/rows$/.exec(url.pathname);
       if (req.method === "GET" && m) {
