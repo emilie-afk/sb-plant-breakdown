@@ -5,6 +5,7 @@ const require = createRequire(import.meta.url);
 // The dashboard's own validated parser: the collector refuses exactly what
 // the dashboard would refuse.
 const SR = require('../../shopify-report.js');
+const PG = require('../../product-grouping.js');
 
 export const STORE_TZ = 'America/Los_Angeles';
 export const REPORT_SCOPE = 'total_sales_by_product';
@@ -65,16 +66,82 @@ export function planPeriods(kinds, now = new Date(), tz = STORE_TZ) {
   return out.map(p => Object.assign(p, { comparison: previousPeriod(p.start, p.end) }));
 }
 
+// The full calendar month `back` months before the store's current month.
+export function closedMonth(back, now = new Date(), tz = STORE_TZ) {
+  const today = ymdInZone(now, tz);
+  let y = +today.slice(0, 4), m = +today.slice(5, 7) - back;
+  while (m < 1) { m += 12; y--; }
+  const key = `${y}-${String(m).padStart(2, '0')}`;
+  const end = `${key}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0')}`;
+  return { kind: back === 1 ? 'previous-month' : 'closed-month', start: key + '-01', end, comparison: previousPeriod(key + '-01', end) };
+}
+
+// How closed months are kept current (configurable; nothing here is assumed
+// approved). Older configs with `monthlyOnDay` keep their meaning: the
+// previous month only, on that day.
+export function closedMonthRule(cfg) {
+  const s = (cfg && cfg.periods) || {};
+  if (s.closedMonths) {
+    const lb = Number(s.closedMonths.lookback);
+    return { lookback: Number.isInteger(lb) && lb >= 0 && lb <= 12 ? lb : 2,
+             onDays: Array.isArray(s.closedMonths.onDays) ? s.closedMonths.onDays.map(Number).filter(d => d >= 1 && d <= 31) : [1, 2] };
+  }
+  if (s.monthlyOnDay) return { lookback: 1, onDays: [Number(s.monthlyOnDay)] };
+  return { lookback: 0, onDays: [] };
+}
+
 // Decides what today's scheduled run should collect from the config's rules.
-//   schedule.monthly.dayOfMonth : on this day, also collect previous-month
-//   schedule.daily              : kinds collected every run
+//   periods.daily                  kinds collected every run (month-to-date)
+//   periods.closedMonths.lookback  on each of `onDays` (store calendar), also
+//   periods.closedMonths.onDays    re-collect the last `lookback` full months,
+//                                  so later refunds and corrections are kept.
+//                                  An unchanged month writes nothing new.
 export function periodsForToday(cfg, now = new Date()) {
   const s = cfg.periods || {};
-  const kinds = [...(s.daily || ['month-to-date'])];
-  const today = ymdInZone(now, cfg.timeZone || STORE_TZ);
-  const dom = Number(today.slice(8, 10));
-  if (s.monthlyOnDay && dom === Number(s.monthlyOnDay) && !kinds.includes('previous-month')) kinds.push('previous-month');
-  return planPeriods(kinds, now, cfg.timeZone || STORE_TZ);
+  const tz = cfg.timeZone || STORE_TZ;
+  const kinds = [...(s.daily || ['month-to-date'])].filter(k => k !== 'previous-month');
+  const out = planPeriods(kinds, now, tz);
+  const rule = closedMonthRule(cfg);
+  const dom = Number(ymdInZone(now, tz).slice(8, 10));
+  const wantPrev = (s.daily || []).includes('previous-month');
+  const lookback = rule.onDays.includes(dom) ? rule.lookback : (wantPrev ? 1 : 0);
+  for (let b = 1; b <= Math.max(lookback, wantPrev ? 1 : 0); b++) out.push(closedMonth(b, now, tz));
+  return out;
+}
+
+// Historical months to collect because shared storage has no complete report
+// for them. Newest first, at most `maxPerRun`, never earlier than `earliest`
+// (YYYY-MM) nor earlier than a month Shopify already returned no data for.
+//   coverage: [{period_start, period_end, completeness}] from the Worker
+//   skip:     months already planned this run (YYYY-MM)
+export function backfillPlan(coverage, { earliest, maxPerRun = 2, now = new Date(), tz = STORE_TZ, noDataBefore = null, skip = [] } = {}) {
+  if (!earliest || !/^\d{4}-\d{2}$/.test(earliest) || !(maxPerRun > 0)) return [];
+  const have = new Set((coverage || []).filter(c => {
+    const full = c.period_start.slice(8, 10) === '01' && c.period_start.slice(0, 7) === c.period_end.slice(0, 7) &&
+      c.period_end === closedMonthEnd(c.period_start.slice(0, 7));
+    return full && c.completeness !== 'partial';
+  }).map(c => c.period_start.slice(0, 7)));
+  const floor = noDataBefore && noDataBefore > earliest ? noDataBefore : earliest;
+  const out = [];
+  for (let b = 1; b <= 240 && out.length < maxPerRun; b++) {
+    const p = closedMonth(b, now, tz);
+    const key = p.start.slice(0, 7);
+    if (key < floor) break;
+    if (have.has(key) || skip.includes(key)) continue;
+    out.push(Object.assign(p, { kind: 'backfill' }));
+  }
+  return out;
+}
+function closedMonthEnd(key) {
+  const y = +key.slice(0, 4), m = +key.slice(5, 7);
+  return `${key}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0')}`;
+}
+
+// Collector exit codes -> the failure codes the Worker records for the dashboard.
+export function failureCodeFor(exit) {
+  return ({ [EXIT.SIGN_IN_NEEDED]: 'sign_in_needed', [EXIT.CAPTCHA]: 'captcha', [EXIT.UNKNOWN_PAGE]: 'unknown_page',
+            [EXIT.EXPORT_FAILED]: 'export_failed', [EXIT.VALIDATION_FAILED]: 'validation_failed',
+            [EXIT.UPLOAD_FAILED]: 'upload_failed' })[exit] || null;
 }
 
 export function customPeriod(start, end) {
@@ -162,6 +229,16 @@ export function validateExport(text, period, opts = {}) {
     productType: r.ptypeBlank ? '' : r.ptype, salesChannel: r.salesChannel || null,
     cur: r.cur, prior: r.priorKnown ? r.prior : null
   }));
+  // Included / excluded split (rows left out of rankings, e.g. shipping
+  // protection), using the dashboard's own exclusion rules.
+  const split = PG.splitExclusions(res.records.map(r => Object.assign({}, r)), PG.DEFAULT_EXCLUSIONS);
+  const sumT = (list) => {
+    const o = {}; ['units', 'gross', 'disc', 'ret', 'net', 'tax', 'total'].forEach(k => {
+      const v = list.reduce((a, r) => a + (r.cur[k] || 0), 0);
+      o[k] = k === 'units' ? Math.round(v) : Math.round((v + Number.EPSILON) * 100) / 100;
+    });
+    return o;
+  };
   const payload = {
     source: 'shopify',
     reportScope: REPORT_SCOPE,
@@ -173,6 +250,10 @@ export function validateExport(text, period, opts = {}) {
     client: opts.client || 'sb-plant-breakdown collector',
     importedBy: 'collector',
     sourceCapabilities: {},
+    collectedAt: opts.collectedAt || new Date().toISOString(),
+    includedTotals: sumT(split.included),
+    excludedTotals: sumT(split.excluded),
+    exclusionLabels: [...new Set(split.excluded.map(r => r.exclusionLabel))],
     totals: t,
     rows: rowsOut
   };
@@ -213,6 +294,17 @@ export function validateConfig(cfg) {
   if (cfg.browserChannel != null && !['chrome', 'msedge'].includes(cfg.browserChannel)) errs.push('browserChannel must be null, "chrome" or "msedge".');
   const w = cfg.signInWaitMinutes;
   if (w != null && !(Number.isInteger(w) && w >= 0 && w <= 120)) errs.push('signInWaitMinutes must be 0–120.');
+  const P = cfg.periods || {};
+  if (P.closedMonths != null) {
+    const c = P.closedMonths;
+    if (!Number.isInteger(c.lookback) || c.lookback < 0 || c.lookback > 12) errs.push('periods.closedMonths.lookback must be 0–12.');
+    if (!Array.isArray(c.onDays) || c.onDays.some(d => !Number.isInteger(d) || d < 1 || d > 28)) errs.push('periods.closedMonths.onDays must be days 1–28.');
+  }
+  if (P.backfill != null) {
+    if (!/^\d{4}-\d{2}$/.test(String(P.backfill.earliest || ''))) errs.push('periods.backfill.earliest must be YYYY-MM.');
+    const n = P.backfill.maxPerRun;
+    if (n != null && !(Number.isInteger(n) && n >= 0 && n <= 6)) errs.push('periods.backfill.maxPerRun must be 0–6.');
+  }
   for (const k of Object.keys(cfg)) {
     if (/secret|password|token|apikey|api_key/i.test(k) && !/CredentialTarget$/.test(k)) errs.push(`Config key "${k}" looks like a secret. Secrets belong in Windows Credential Manager, not the config file.`);
   }

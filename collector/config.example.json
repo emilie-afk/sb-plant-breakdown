@@ -11,9 +11,10 @@
   "_signInWaitComment": "Minutes a headed run waits for a person to finish signing in (2FA) before giving up. 0-120.",
   "signInWaitMinutes": 30,
   "localDir": null,
-  "_periodsComment": "What a scheduled run collects (dates in timeZone). daily: kinds collected every run. monthlyOnDay: on this day of the month, also collect the previous full month.",
+  "_periodsComment": "What a scheduled run collects (dates in timeZone). daily: kinds collected every run. closedMonths: on these days of the month, re-collect the last `lookback` full months so later corrections are kept (an unchanged month writes nothing). backfill: each run also fills up to maxPerRun missing full months, newest first, back to `earliest` (YYYY-MM) or until Shopify returns no data. All proposals: change them freely.",
   "periods": {
     "daily": ["month-to-date"],
-    "monthlyOnDay": 2
+    "closedMonths": { "lookback": 2, "onDays": [1, 2, 9, 16, 23] },
+    "backfill": { "earliest": "2024-01", "maxPerRun": 2 }
   }
 }

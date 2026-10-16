@@ -507,7 +507,18 @@
     if (m.reconciliation && m.reconciliation.ok === false) {
       notes.push("⚠ This import did not reconcile to the figures entered at import time.");
     }
-    if (m.capabilities && m.capabilities.hasPrior === false && !legacy) {
+    if (m.period) {
+      notes.push("<b>" + esc(m.period.label) + "</b>. Combined from the latest successful revision of each month: " +
+        m.period.revisionsUsed.map(function (u) { return esc(u.month) + " rev. " + u.revision + (u.status === "partial" ? " (partial)" : ""); }).join(", ") +
+        ". Units, sales, discounts and returns are summed; products are counted once across the period; averages and changes are " +
+        "worked out from the combined totals. Overlapping reports and embedded previous-period columns are never added.");
+      if (m.period.missing && m.period.missing.length) {
+        notes.push("⚠ No report for " + m.period.missing.map(esc).join(", ") + ". Those months are missing, not zero, so these totals are partial.");
+      }
+      if (!(m.capabilities && m.capabilities.hasPrior)) {
+        notes.push("No comparison period is shown: " + esc((m.comparisonInfo && m.comparisonInfo.reason) || "none selected") + "");
+      }
+    } else if (m.capabilities && m.capabilities.hasPrior === false && !legacy) {
       notes.push("This report has no previous-period columns, so period-over-period columns read \"no prior period\".");
     }
     var hasPid = !!(m.capabilities && m.capabilities.hasProductId);

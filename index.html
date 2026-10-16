@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="sb-mcg-password" content="__SB_MCG_PASSWORD__">
+<!-- Read-only shared-storage connection, filled in at build time (inline.js) from
+     SB_SHARED_URL / SB_SHARED_KEY. The built page is password-encrypted. -->
+<meta name="sb-shared-url" content="__SB_SHARED_URL__">
+<meta name="sb-shared-key" content="__SB_SHARED_KEY__">
 <meta name="sb-mcg-url" content="/api/mcg">
 <title>Succulents Box — Sales Breakdown Analyzer</title>
 <style>
@@ -128,12 +132,17 @@
   .pager-ctl select,.pager-ctl input{padding:4px 6px;border:1px solid var(--border);border-radius:5px;font-size:12px}
   .pager-ctl button[disabled]{opacity:.4;cursor:default}
   #di-key{flex:1;min-width:180px;padding:6px 8px;border:1px solid var(--border);border-radius:6px}
+  .ds-box{max-width:1100px;width:94%;max-height:90vh}
+  #data-settings-modal{z-index:90}
+  .data-status{padding:10px 14px;margin-bottom:8px;font-size:13px}
+  .data-status:empty,.period-bar:empty{display:none}
+  .period-bar select{min-width:120px}
 </style>
 </head>
 <body>
 
 <h1>🌵 Succulents Box — Sales Breakdown Analyzer</h1>
-<div class="sub">Upload Amazon or Shopify exports. Files you drop are parsed in your browser and saved in this browser. To share reports across browsers and computers, connect shared storage under Data &amp; imports — nothing is uploaded until you choose to.</div>
+<div class="sub">Shopify sales load automatically from the daily collection. Amazon reports are uploaded by hand under ⚙ Data settings, which also holds connection setup, import history and troubleshooting.</div>
 
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:12px;flex-wrap:wrap">
   <div class="tabs" style="align-items:center;flex-wrap:wrap">
@@ -148,19 +157,18 @@
     <button class="tab-btn" data-tab="cross">⇆ Cross-channel</button>
     <button class="tab-btn" data-tab="ovm">⇆ Owned vs Market</button>
     <button class="tab-btn" data-tab="oppmap">🎯 Opportunity Map</button>
-    <span style="width:1px;background:var(--border);align-self:stretch;margin:0 4px"></span>
-    <button class="tab-btn" data-tab="data">⚙ Data &amp; imports</button>
   </div>
-  <button class="tab" id="manage-btn">⚙ Manage snapshots</button>
+  <button class="tab" id="data-settings-btn" title="Connection, uploads, import history, backups and troubleshooting">⚙ Data settings</button>
 </div>
 
 <!-- ============== AMAZON ============== -->
 <div class="tab-panel" id="tab-amazon">
+  <div class="picker period-bar" id="az-period"></div>
   <div class="picker">
     <label>Report</label><select id="amazon-snap-select"></select>
     <label>vs Compare</label><select id="amazon-compare-select"></select>
     <div class="right">
-      <button class="tab" id="amazon-addfile-btn">+ Add file</button>
+      <button class="tab" data-open-settings="ds-upload" title="Amazon reports are uploaded by hand">⬆ Upload Amazon report</button>
       <button class="tab" id="amazon-download">⬇ Clean data</button>
       <button class="tab" id="amazon-download-breakdown">⬇ Breakdown (group + all products)</button>
     </div>
@@ -187,13 +195,8 @@
     <button class="tab" id="az-reset">Reset</button>
   </div>
 
-  <div class="dropzone" id="amazon-dropzone">
-    <div class="dz-msg">📂 Drop file here, or click to browse</div>
-    <div class="dz-sub">Accepts Amazon metric-data .xlsx or .csv</div>
-    <input type="file" id="amazon-file-input" accept=".xlsx,.xls,.csv">
-  </div>
   <div class="banner" id="amazon-mode-banner"></div>
-  <div id="amazon-empty" class="empty" style="display:block">Drop an Amazon metric-data file above to get started.</div>
+  <div id="amazon-empty" class="empty" style="display:block">No Amazon report yet. Amazon reports are uploaded by hand: open <button class="tab" data-open-settings="ds-upload">⚙ Data settings → Upload a report</button>.</div>
 
   <div id="amazon-content" style="display:none">
     <div class="panel" id="az-provenance" style="padding:12px 16px"></div>
@@ -291,11 +294,12 @@
 
 <!-- ============== SHOPIFY ============== -->
 <div class="tab-panel" id="tab-shopify" style="display:block">
+  <div class="panel data-status" id="sb-data-status"></div>
+  <div class="picker period-bar" id="sb-period"></div>
   <div class="picker">
     <label>Report</label><select id="shopify-snap-select"></select>
     <label>vs Compare</label><select id="shopify-compare-select"></select>
     <div class="right">
-      <button class="tab" id="shopify-addfile-btn">+ Add file</button>
       <button class="tab" id="shopify-download">⬇ Clean data</button>
       <button class="tab" id="shopify-download-breakdown">⬇ Breakdown (group + all products)</button>
     </div>
@@ -332,13 +336,8 @@
     <button class="tab" id="sb-reset">Reset</button>
   </div>
 
-  <div class="dropzone" id="shopify-dropzone">
-    <div class="dz-msg">📂 Drop file here, or click to browse</div>
-    <div class="dz-sub">Accepts Shopify "Total sales by product" .csv or .xlsx</div>
-    <input type="file" id="shopify-file-input" accept=".csv,.xlsx,.xls">
-  </div>
   <div class="banner" id="shopify-mode-banner"></div>
-  <div id="shopify-empty" class="empty" style="display:block">Drop a Shopify "Total sales by product" export above to get started.</div>
+  <div id="shopify-empty" class="empty" style="display:block">No saved Shopify report yet. Reports appear here automatically after the daily collection; a file can also be uploaded under ⚙ Data settings.</div>
 
   <div id="shopify-content" style="display:none">
     <div class="panel" id="sb-provenance" style="padding:12px 16px"></div>
@@ -428,6 +427,8 @@
 
 <!-- ============== VENDORS ============== -->
 <div class="tab-panel" id="tab-vendors">
+  <div class="panel data-status" id="vn-data-status"></div>
+  <div class="picker period-bar" id="vn-period"></div>
   <div class="picker">
     <label>Report</label><select id="vendors-snap-select"></select>
     <label>vs Compare</label><select id="vendors-compare-select"></select>
@@ -460,7 +461,7 @@
     <button class="tab" id="vn-reset">Reset</button>
   </div>
   <div id="vendors-empty" class="empty" style="display:block">
-    Import a Shopify "Total sales by product" report on the Shopify tab to see vendor analytics.
+    No saved Shopify report yet. Vendor analytics appear automatically once the daily collection has stored a report.
   </div>
   <div id="vendors-content" style="display:none">
     <div class="panel" id="vn-provenance" style="padding:12px 16px"></div>
@@ -758,8 +759,55 @@
 </div>
 </div><!-- closes #tab-cross (was missing on main, which nested later panels and modals inside it) -->
 
-<!-- ============== DATA & IMPORTS ============== -->
-<div class="tab-panel" id="tab-data"><div id="di-root"></div></div>
+<!-- ============== DATA SETTINGS (panel, not a tab) ============== -->
+<div class="modal" id="data-settings-modal" role="dialog" aria-label="Data settings">
+  <div class="modal-box ds-box">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <h2 style="margin:0">⚙ Data settings</h2>
+      <button class="tab" id="data-settings-close">Close</button>
+    </div>
+    <div class="small" style="margin:4px 0 10px">Normal use needs nothing here: the newest saved Shopify report opens automatically.
+      <a href="#ds-connection">Connection</a> · <a href="#ds-history-panel">Report history</a> · <a href="#ds-reports">Reports</a> · <a href="#ds-history">Import history</a> ·
+      <a href="#ds-upload">Upload a report</a> · <a href="#ds-snapshots">Snapshots &amp; backup</a> · <a href="#ds-catalog">Catalog</a> · <a href="#ds-trouble">Troubleshooting</a></div>
+    <div id="di-root"></div>
+    <div class="panel" id="ds-upload"><div class="panel-h"><h2>Upload a report</h2>
+      <span class="small">Amazon: the normal way in. Shopify: a fallback when the automatic collection cannot run.</span></div>
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px">
+        <div><div class="small" style="margin-bottom:4px"><b>Amazon</b> metric-data export</div>
+        <div class="dropzone" id="amazon-dropzone">
+    <div class="dz-msg">📂 Drop file here, or click to browse</div>
+    <div class="dz-sub">Accepts Amazon metric-data .xlsx or .csv</div>
+    <input type="file" id="amazon-file-input" accept=".xlsx,.xls,.csv">
+  </div>
+        </div>
+        <div><div class="small" style="margin-bottom:4px"><b>Shopify</b> "Total sales by product" export</div>
+        <div class="dropzone" id="shopify-dropzone">
+    <div class="dz-msg">📂 Drop file here, or click to browse</div>
+    <div class="dz-sub">Accepts Shopify "Total sales by product" .csv or .xlsx</div>
+    <input type="file" id="shopify-file-input" accept=".csv,.xlsx,.xls">
+  </div>
+        </div>
+      </div>
+      <div class="small" style="margin-top:6px">Files are read in this browser. A Shopify file for a period that is already saved
+        is shown beside it, never added to it.</div>
+    </div>
+    <div class="panel" id="ds-snapshots"><div class="panel-h"><h2>Snapshots &amp; backup</h2></div>
+      <div class="small" style="margin-bottom:6px">Rename, delete, back up or restore the reports saved in this browser.</div>
+      <button class="tab" id="manage-btn">⚙ Manage snapshots</button>
+    </div>
+    <div class="panel" id="ds-catalog"><div class="panel-h"><h2>Catalog</h2></div>
+      <div class="small">The storefront catalog (<code>/products.json</code>) is fetched automatically and cached for 24 hours.
+        Sales rows are matched to it by product id, otherwise by a unique exact title and vendor; ambiguous rows need an approved
+        mapping, kept under Shared settings (<code>catalog_mappings</code>). Product-level sales are never split across variants.</div>
+    </div>
+    <div class="panel" id="ds-trouble"><div class="panel-h"><h2>Troubleshooting</h2></div>
+      <div class="small" style="margin-bottom:6px">If the status above the analysis shows a failed collection: make sure the collector PC is on at the
+        scheduled time and signed in to Shopify (run <code>npm run login</code> in <code>collector/</code> once if asked), then press Refresh.
+        A failed run never replaces the last successful report.</div>
+      <button class="tab" id="ds-refresh-now">Refresh from shared storage now</button>
+    </div>
+  </div>
+</div>
 
 <div class="modal" id="manage-modal">
   <div class="modal-box">
@@ -778,6 +826,7 @@
 <script src="amazon-report.js"></script>
 <script src="product-grouping.js"></script>
 <script src="shared-sync.js"></script>
+<script src="period-engine.js"></script>
 <script src="breakdown-ui.js"></script>
 <script src="classification-review.js"></script>
 <script src="exclusions.js"></script>
@@ -785,6 +834,7 @@
 <script src="shopify-views.js"></script>
 <script src="amazon-views.js"></script>
 <script src="data-imports-view.js"></script>
+<script src="period-view.js"></script>
 <script src="channel-guard.js"></script>
 
 </body>

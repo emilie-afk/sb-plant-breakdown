@@ -9,7 +9,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { ROOT, SAMPLE_FIXTURE, CHANNEL_FIXTURE, FACTS } from './load.mjs';
 import * as L from '../collector/src/lib.mjs';
 import * as R from '../collector/src/redact.mjs';
-import { uploadReport } from '../collector/src/upload.mjs';
+import { uploadReport, reportFailure, fetchCoverage } from '../collector/src/upload.mjs';
 import { makeD1 } from './d1shim.mjs';
 import worker from '../worker/src/index.js';
 
@@ -41,6 +41,44 @@ test('month-to-date is skipped on the 1st; the previous month is added on the co
   assert.deepEqual(p.map(x => [x.kind, x.start, x.end]), [['month-to-date', '2026-11-01', '2026-11-01'], ['previous-month', '2026-10-01', '2026-10-31']]);
   const q = L.periodsForToday({ periods: { daily: ['month-to-date'], monthlyOnDay: 2 } }, new Date('2026-11-03T18:00:00Z'));
   assert.deepEqual(q.map(x => x.kind), ['month-to-date']);
+});
+
+test('recently closed months are re-collected on the configured days', () => {
+  const cfg = { periods: { daily: ['month-to-date'], closedMonths: { lookback: 2, onDays: [1, 2, 9] } } };
+  // Nov 9 in Los Angeles: month-to-date plus October and September
+  const a = L.periodsForToday(cfg, new Date('2026-11-09T18:00:00Z'));
+  assert.deepEqual(a.map(p => [p.kind, p.start, p.end]), [
+    ['month-to-date', '2026-11-01', '2026-11-08'], ['previous-month', '2026-10-01', '2026-10-31'], ['closed-month', '2026-09-01', '2026-09-30']]);
+  // Nov 10: not a refresh day
+  assert.deepEqual(L.periodsForToday(cfg, new Date('2026-11-10T18:00:00Z')).map(p => p.kind), ['month-to-date']);
+  // Jan 1: December lands straight away (month-to-date is skipped on the 1st), across the year boundary
+  assert.deepEqual(L.periodsForToday(cfg, new Date('2027-01-01T18:00:00Z')).map(p => p.start), ['2026-12-01', '2026-11-01']);
+  assert.deepEqual(L.closedMonthRule({ periods: { monthlyOnDay: 2 } }), { lookback: 1, onDays: [2] }, 'old configs keep their meaning');
+});
+
+test('backfill plans missing complete months, newest first, within limits', () => {
+  const now = new Date('2026-10-16T18:00:00Z');
+  const cov = [
+    { period_start: '2026-09-01', period_end: '2026-09-30', completeness: 'complete' },
+    { period_start: '2026-08-01', period_end: '2026-08-31', completeness: 'partial' },   // stored before it ended: re-collect
+    { period_start: '2026-07-01', period_end: '2026-07-15', completeness: 'partial' },   // month-to-date only: re-collect
+    { period_start: '2026-06-01', period_end: '2026-06-30', completeness: 'complete' },
+    { period_start: '2026-10-01', period_end: '2026-10-15', completeness: 'partial' }
+  ];
+  assert.deepEqual(L.backfillPlan(cov, { earliest: '2026-01', maxPerRun: 3, now }).map(p => p.start), ['2026-08-01', '2026-07-01', '2026-05-01']);
+  assert.deepEqual(L.backfillPlan(cov, { earliest: '2026-01', maxPerRun: 2, now, skip: ['2026-08'] }).map(p => p.start), ['2026-07-01', '2026-05-01']);
+  assert.deepEqual(L.backfillPlan(cov, { earliest: '2026-06', maxPerRun: 5, now }).map(p => p.start), ['2026-08-01', '2026-07-01']);
+  assert.deepEqual(L.backfillPlan(cov, { earliest: '2026-01', maxPerRun: 5, now, noDataBefore: '2026-05' }).map(p => p.start), ['2026-08-01', '2026-07-01', '2026-05-01']);
+  assert.deepEqual(L.backfillPlan(cov, { earliest: null, now }), []);
+  assert.ok(L.backfillPlan(cov, { earliest: '2026-01', now }).every(p => p.kind === 'backfill' && p.comparison));
+  assert.ok(L.validateConfig({ adminUrl: ADMIN, reportId: REPORT, periods: { backfill: { earliest: '2024-1' } } }).some(e => /earliest/.test(e)));
+  assert.ok(L.validateConfig({ adminUrl: ADMIN, reportId: REPORT, periods: { closedMonths: { lookback: 20, onDays: [1] } } }).some(e => /lookback/.test(e)));
+});
+
+test('collector failures map to the codes the dashboard shows', () => {
+  assert.equal(L.failureCodeFor(L.EXIT.SIGN_IN_NEEDED), 'sign_in_needed');
+  assert.equal(L.failureCodeFor(L.EXIT.VALIDATION_FAILED), 'validation_failed');
+  assert.equal(L.failureCodeFor(L.EXIT.OK), null);
 });
 
 test('custom periods are checked', () => {
@@ -151,8 +189,19 @@ test('the real Sept export uploads to the real Worker code, then reads back as u
   const a = await uploadReport(v.payload, { workerUrl: 'https://w.example', secret: 'i'.repeat(40), fetchImpl });
   assert.equal(a.ok, true, JSON.stringify(a));
   assert.equal(a.outcome, 'succeeded');
-  const b = await uploadReport(v.payload, { workerUrl: 'https://w.example', secret: 'i'.repeat(40), fetchImpl });
-  assert.equal(b.outcome, 'unchanged');
+  const b = await uploadReport(Object.assign({}, v.payload, { collectedAt: new Date().toISOString() }), { workerUrl: 'https://w.example', secret: 'i'.repeat(40), fetchImpl });
+  assert.equal(b.outcome, 'unchanged', 'a later collection of the same figures is not a new revision');
+  // The stored report carries its collection time, completeness and included/excluded split.
+  const rep = (await (await fetchImpl('https://w.example/v1/reports', { headers: { authorization: 'Bearer ' + 'd'.repeat(40) } })).json()).reports[0];
+  assert.ok(rep.collected_at); assert.equal(rep.completeness, 'complete');
+  assert.equal(Math.round((rep.includedTotals.net + rep.excludedTotals.net) * 100) / 100, rep.totals.net);
+  assert.ok(rep.excludedTotals.net > 0, 'the synthetic export has a shipping-protection row');
+  // A failure before upload is recorded for the dashboard; the stored report is untouched.
+  const f = await reportFailure({ period: { start: '2026-10-01', end: '2026-10-15' }, errorCode: 'sign_in_needed', message: 'signed out' },
+                                { workerUrl: 'https://w.example', secret: 'i'.repeat(40), fetchImpl });
+  assert.equal(f.ok, true);
+  const cov = await fetchCoverage({ workerUrl: 'https://w.example', secret: 'i'.repeat(40), fetchImpl });
+  assert.deepEqual(cov.map(c => [c.period_start, c.period_end, c.revision]), [['2026-09-01', '2026-09-30', 1]]);
   const bad = await uploadReport(v.payload, { workerUrl: 'https://w.example', secret: 'wrong'.repeat(10), fetchImpl });
   assert.equal(bad.ok, false); assert.equal(bad.httpStatus, 401);
 });

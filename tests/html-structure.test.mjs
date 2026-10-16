@@ -1,6 +1,6 @@
 // index.html structure: every tab panel and modal must sit directly in <body>.
-// A missing </div> once nested the Data & imports tab and the snapshot modal
-// inside the hidden Cross-channel panel, so they rendered blank.
+// A missing </div> once nested the data panel and the snapshot modal inside
+// the hidden Cross-channel panel, so they rendered blank.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -32,6 +32,43 @@ test('every tab panel and modal is a direct child of <body>', () => {
   const tops = topLevelDivs(body).out.join('\n');
   const ids = [...body.matchAll(/<div[^>]*class="[^"]*\b(?:tab-panel|modal)\b[^"]*"[^>]*id="([^"]+)"|<div[^>]*id="([^"]+)"[^>]*class="[^"]*\b(?:tab-panel|modal)\b/g)]
     .map(m => m[1] || m[2]);
-  assert.ok(ids.includes('tab-data') && ids.includes('tab-cross') && ids.includes('manage-modal'));
+  assert.ok(ids.includes('data-settings-modal') && ids.includes('tab-cross') && ids.includes('manage-modal'));
   for (const id of ids) assert.match(tops, new RegExp('id="' + id + '"'), id + ' is nested inside another element');
+});
+
+test('Data settings is a panel, not a navigation tab', () => {
+  assert.doesNotMatch(body, /data-tab="data"/, 'no Data & imports tab in the main navigation');
+  assert.doesNotMatch(body, /id="tab-data"/);
+  assert.match(body, /id="data-settings-btn"/);
+  // Manual upload, snapshot management and troubleshooting live inside the panel.
+  const panel = body.slice(body.indexOf('id="data-settings-modal"'), body.indexOf('id="manage-modal"'));
+  for (const id of ['di-root', 'shopify-dropzone', 'amazon-dropzone', 'shopify-file-input', 'amazon-file-input', 'manage-btn', 'ds-trouble', 'ds-catalog']) {
+    assert.match(panel, new RegExp('id="' + id + '"'), id + ' is inside Data settings');
+  }
+});
+
+test('status and period selector sit above the analysis on Shopify and Vendors', () => {
+  for (const [tab, ids] of [['tab-shopify', ['sb-data-status', 'sb-period']], ['tab-vendors', ['vn-data-status', 'vn-period']]]) {
+    const start = body.indexOf('id="' + tab + '"');
+    const content = body.indexOf('-content"', start);
+    for (const id of ids) {
+      const at = body.indexOf('id="' + id + '"', start);
+      assert.ok(at > start && at < content, id + ' is above the analysis in ' + tab);
+    }
+  }
+});
+
+test('no file input is needed on the analysis tabs during normal use', () => {
+  for (const tab of ['tab-shopify', 'tab-vendors']) {
+    const start = body.indexOf('id="' + tab + '"');
+    const rest = body.slice(start + 10);
+    const next = rest.search(/class="tab-panel\b|class="modal\b/);
+    assert.doesNotMatch(rest.slice(0, next < 0 ? undefined : next), /type="file"/, tab + ' has no file input');
+  }
+});
+
+test('the built-in shared connection is a placeholder in the source', () => {
+  const raw = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  assert.match(raw, /name="sb-shared-url" content="__SB_SHARED_URL__"/);
+  assert.match(raw, /name="sb-shared-key" content="__SB_SHARED_KEY__"/);
 });

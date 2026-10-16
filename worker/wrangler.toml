@@ -7,7 +7,9 @@
 #
 # Secrets live only in Cloudflare (set by setup-cloudflare.ps1):
 #   INGEST_SECRET      >= 32 chars; held by the Windows collector
-#   DASHBOARD_SECRET   >= 32 chars, different; typed into the dashboard once
+#   DASHBOARD_SECRET   >= 32 chars, different; for uploads and shared settings
+#   VIEWER_SECRET      optional, read-only; built into the encrypted dashboard
+#                      (set by update-worker.ps1)
 #
 # This file does not record whether, or where, the Worker is deployed.
 
