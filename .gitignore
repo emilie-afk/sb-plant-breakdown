@@ -4,3 +4,10 @@ dist/
 .DS_Store
 Thumbs.db
 package-lock.json
+collector/node_modules/
+collector/config.local.json
+_work/
+worker/wrangler.local.toml
+worker/.wrangler/
+_private_acceptance/
+_private_tests/

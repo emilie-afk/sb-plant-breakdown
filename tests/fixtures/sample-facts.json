@@ -1,0 +1,533 @@
+{
+  "_note": "Computed by tools/make-sample-fixtures.mjs from its own model. All data is synthetic.",
+  "shopify": {
+    "rows": 805,
+    "included": 804,
+    "cur": {
+      "units": 5192,
+      "gross": 118529.82,
+      "disc": -7224.07,
+      "ret": -489.86,
+      "net": 110815.89,
+      "tax": 5407.23,
+      "total": 116223.12
+    },
+    "prior": {
+      "units": 4862,
+      "gross": 111936.55,
+      "disc": -6007.69,
+      "ret": -719.97,
+      "net": 105208.89,
+      "tax": 5156.92,
+      "total": 110365.81
+    },
+    "includedNet": 110412.27,
+    "routeNet": 403.62,
+    "routeUnits": 310,
+    "firstRowUnits": 13,
+    "zeroRows": 202,
+    "returnRows": 23,
+    "blankTypes": 10,
+    "newRows": 139,
+    "vendors": {
+      "Dropship Supplier A": {
+        "rows": 240,
+        "net": 46734.92
+      },
+      "Own Label": {
+        "rows": 502,
+        "net": 51564.73
+      },
+      "Tree Nursery B": {
+        "rows": 6,
+        "net": 3561.02
+      },
+      "Houseplant Shop C": {
+        "rows": 3,
+        "net": 300.69
+      },
+      "Gift Maker Co": {
+        "rows": 9,
+        "net": 3390.66
+      },
+      "Route": {
+        "rows": 1,
+        "net": 403.62
+      },
+      "Air Plant Co": {
+        "rows": 31,
+        "net": 2051.09
+      },
+      "Wholesale Greenhouse": {
+        "rows": 6,
+        "net": 1452.6
+      },
+      "Memorial Gifts Co": {
+        "rows": 7,
+        "net": 1356.56
+      }
+    },
+    "vendorCount": 9,
+    "anchors": {
+      "spider": {
+        "id": "7100000001013",
+        "title": "Spider Plant Variegated 4 inch",
+        "vendor": "Dropship Supplier A",
+        "ptype": "Houseplants",
+        "cur": {
+          "units": 40,
+          "gross": 680,
+          "disc": -68,
+          "ret": 0,
+          "net": 612,
+          "tax": 30.6,
+          "total": 642.6
+        },
+        "prior": {
+          "units": 32,
+          "gross": 544,
+          "disc": -27.2,
+          "ret": 0,
+          "net": 516.8,
+          "tax": 25.84,
+          "total": 542.64
+        }
+      },
+      "negative": {
+        "id": "7100000002026",
+        "title": "Pothos 'Marble Queen' 4 inch",
+        "vendor": "Dropship Supplier A",
+        "ptype": "Houseplants",
+        "cur": {
+          "units": -1,
+          "gross": 0,
+          "disc": 0,
+          "ret": -29.5,
+          "net": -29.5,
+          "tax": 0,
+          "total": -29.5
+        },
+        "prior": {
+          "units": 3,
+          "gross": 88.5,
+          "disc": 0,
+          "ret": 0,
+          "net": 88.5,
+          "tax": 4.43,
+          "total": 92.93
+        }
+      },
+      "lapsedNegative": {
+        "id": "7100000003039",
+        "title": "Gasteria 'Little Warty'",
+        "vendor": "Dropship Supplier A",
+        "ptype": "Succulents",
+        "cur": {
+          "units": 0,
+          "gross": 0,
+          "disc": 0,
+          "ret": 0,
+          "net": 0,
+          "tax": 0,
+          "total": 0
+        },
+        "prior": {
+          "units": -1,
+          "gross": 0,
+          "disc": 0,
+          "ret": -18,
+          "net": -18,
+          "tax": 0,
+          "total": -18
+        }
+      },
+      "pearlsOwn": {
+        "id": "7100000004052",
+        "title": "String of Pearls - Senecio rowleyanus",
+        "vendor": "Own Label",
+        "ptype": "Succulents",
+        "cur": {
+          "units": 30,
+          "gross": 420,
+          "disc": -33.6,
+          "ret": 0,
+          "net": 386.4,
+          "tax": 15.46,
+          "total": 401.86
+        },
+        "prior": {
+          "units": 22,
+          "gross": 308,
+          "disc": -15.4,
+          "ret": 0,
+          "net": 292.6,
+          "tax": 11.7,
+          "total": 304.3
+        }
+      },
+      "pearlsDrop": {
+        "id": "7100000005065",
+        "title": "String of Pearls - Senecio rowleyanus",
+        "vendor": "Dropship Supplier A",
+        "ptype": "Succulents",
+        "cur": {
+          "units": 2,
+          "gross": 44,
+          "disc": -4.4,
+          "ret": 0,
+          "net": 39.6,
+          "tax": 1.98,
+          "total": 41.58
+        },
+        "prior": {
+          "units": 0,
+          "gross": 0,
+          "disc": 0,
+          "ret": 0,
+          "net": 0,
+          "tax": 0,
+          "total": 0
+        }
+      },
+      "blankPlant": {
+        "id": "7100000011143",
+        "title": "Epiphyllum 'Zig Zag' Cactus",
+        "vendor": "Dropship Supplier A",
+        "ptype": "",
+        "cur": {
+          "units": 4,
+          "gross": 136,
+          "disc": -13.6,
+          "ret": 0,
+          "net": 122.4,
+          "tax": 6.12,
+          "total": 128.52
+        },
+        "prior": {
+          "units": 2,
+          "gross": 68,
+          "disc": 0,
+          "ret": 0,
+          "net": 68,
+          "tax": 3.4,
+          "total": 71.4
+        }
+      },
+      "blankPot": {
+        "id": "7100000012156",
+        "title": "Glazed Ceramic Pot",
+        "vendor": "Own Label",
+        "ptype": "",
+        "cur": {
+          "units": 7,
+          "gross": 105,
+          "disc": 0,
+          "ret": 0,
+          "net": 105,
+          "tax": 4.2,
+          "total": 109.2
+        },
+        "prior": {
+          "units": 9,
+          "gross": 135,
+          "disc": -13.5,
+          "ret": 0,
+          "net": 121.5,
+          "tax": 4.86,
+          "total": 126.36
+        }
+      },
+      "blankFert": {
+        "id": "7100000013169",
+        "title": "Succulent Fertilizer (8 oz)",
+        "vendor": "Own Label",
+        "ptype": "",
+        "cur": {
+          "units": 8,
+          "gross": 71.92,
+          "disc": 0,
+          "ret": 0,
+          "net": 71.92,
+          "tax": 5.21,
+          "total": 77.13
+        },
+        "prior": {
+          "units": 1,
+          "gross": 8.99,
+          "disc": -0.9,
+          "ret": 0,
+          "net": 8.09,
+          "tax": 0.59,
+          "total": 8.68
+        }
+      },
+      "unidentified": {
+        "id": "7100000021273",
+        "title": "Pink Starlight",
+        "vendor": "Own Label",
+        "ptype": "Succulents",
+        "cur": {
+          "units": 4,
+          "gross": 44,
+          "disc": 0,
+          "ret": 0,
+          "net": 44,
+          "tax": 3.19,
+          "total": 47.19
+        },
+        "prior": {
+          "units": 5,
+          "gross": 55,
+          "disc": -2.75,
+          "ret": 0,
+          "net": 52.25,
+          "tax": 3.79,
+          "total": 56.04
+        }
+      },
+      "flagSub": {
+        "id": "7100000022286",
+        "title": "Warming Pack (Subscription)",
+        "vendor": "Own Label",
+        "ptype": "Fertilizers",
+        "cur": {
+          "units": 5,
+          "gross": 22.5,
+          "disc": -2.25,
+          "ret": 0,
+          "net": 20.25,
+          "tax": 1.22,
+          "total": 21.47
+        },
+        "prior": {
+          "units": 4,
+          "gross": 22.5,
+          "disc": -2.25,
+          "ret": -4.5,
+          "net": 15.75,
+          "tax": 0.95,
+          "total": 16.7
+        }
+      },
+      "flagCard": {
+        "id": "7100000023299",
+        "title": "Gift Card - $25 | Plant Gift Card",
+        "vendor": "Own Label",
+        "ptype": "Greeting Card",
+        "cur": {
+          "units": 1,
+          "gross": 25,
+          "disc": 0,
+          "ret": 0,
+          "net": 25,
+          "tax": 1.81,
+          "total": 26.81
+        },
+        "prior": {
+          "units": 6,
+          "gross": 150,
+          "disc": 0,
+          "ret": 0,
+          "net": 150,
+          "tax": 10.88,
+          "total": 160.88
+        }
+      },
+      "giftHeart": {
+        "id": "7100000024312",
+        "title": "Heart Succulent Arrangement",
+        "vendor": "Gift Maker Co",
+        "ptype": "Gift",
+        "cur": {
+          "units": 2,
+          "gross": 246,
+          "disc": -24.6,
+          "ret": -82,
+          "net": 139.4,
+          "tax": 10.11,
+          "total": 149.51
+        },
+        "prior": {
+          "units": 6,
+          "gross": 492,
+          "disc": -24.6,
+          "ret": 0,
+          "net": 467.4,
+          "tax": 33.89,
+          "total": 501.29
+        }
+      },
+      "giftWood": {
+        "id": "7100000025325",
+        "title": "Wooden Planter Succulent Arrangement",
+        "vendor": "Gift Maker Co",
+        "ptype": "Gift",
+        "cur": {
+          "units": 4,
+          "gross": 320,
+          "disc": -16,
+          "ret": 0,
+          "net": 304,
+          "tax": 0,
+          "total": 304
+        },
+        "prior": {
+          "units": 2,
+          "gross": 160,
+          "disc": -16,
+          "ret": 0,
+          "net": 144,
+          "tax": 0,
+          "total": 144
+        }
+      },
+      "route": {
+        "id": "7100000026338",
+        "title": "Shipping Protection by Route",
+        "vendor": "Route",
+        "ptype": "Insurance",
+        "cur": {
+          "units": 310,
+          "gross": 434,
+          "disc": -30.38,
+          "ret": 0,
+          "net": 403.62,
+          "tax": 0.4,
+          "total": 404.02
+        },
+        "prior": {
+          "units": 298,
+          "gross": 417.2,
+          "disc": -29.2,
+          "ret": 0,
+          "net": 388,
+          "tax": 0.39,
+          "total": 388.39
+        }
+      },
+      "ambiguous": [
+        "Dracaena 'Sunray' 6 inch",
+        "Peperomia 'Pixie' 4 inch"
+      ]
+    },
+    "duplicateTitles": [
+      "String of Pearls - Senecio rowleyanus",
+      "Living Stones - Lithops Mix",
+      "String of Hearts - Ceropegia woodii",
+      "Gasteria 'Little Warty'"
+    ],
+    "vendorNames": {
+      "own": "Own Label",
+      "drop": "Dropship Supplier A",
+      "gift": "Gift Maker Co",
+      "air": "Air Plant Co",
+      "route": "Route"
+    }
+  },
+  "withId": {
+    "rows": 575,
+    "cur": {
+      "units": 5178,
+      "gross": 121397.12,
+      "disc": -6417.09,
+      "ret": 0,
+      "net": 114980.03,
+      "tax": 4345.5,
+      "total": 119325.53
+    },
+    "notInCatalog": 21,
+    "matchedById": 554
+  },
+  "channel": {
+    "rows": 2208,
+    "products": 805,
+    "cur": {
+      "units": 5192,
+      "gross": 118529.82,
+      "disc": -7224.07,
+      "ret": -489.86,
+      "net": 110815.89,
+      "tax": 5407.23,
+      "total": 116223.12
+    },
+    "prior": {
+      "units": 4862,
+      "gross": 111936.55,
+      "disc": -6007.69,
+      "ret": -719.97,
+      "net": 105208.89,
+      "tax": 5156.92,
+      "total": 110365.81
+    },
+    "own": {
+      "units": 4856,
+      "gross": 111586.39,
+      "disc": -6800.42,
+      "ret": -469.34,
+      "net": 104316.63,
+      "tax": 5107.44,
+      "total": 109424.07
+    },
+    "amazon": {
+      "units": 336,
+      "gross": 6943.43,
+      "disc": -423.65,
+      "ret": -20.52,
+      "net": 6499.26,
+      "tax": 299.79,
+      "total": 6799.05
+    },
+    "amazonRows": 218,
+    "amazonProducts": 218,
+    "ownProducts": 805,
+    "channels": [
+      "Draft Orders",
+      "Facebook & Instagram",
+      "Online Store",
+      "Recharge Subscriptions",
+      "Sellbrite",
+      "Shop",
+      "TikTok"
+    ]
+  },
+  "catalog": {
+    "products": 1180,
+    "duplicatedSkus": 161,
+    "septNotInCatalog": 27,
+    "septAmbiguous": 2
+  },
+  "amazon": {
+    "v1": {
+      "rows": 300,
+      "units": 343,
+      "glance": 11155,
+      "shipped": 335,
+      "conv": 0.0307,
+      "firstAsin": "B0SMPL0000"
+    },
+    "v2": {
+      "rows": 360,
+      "units": 4213,
+      "glance": 149647,
+      "shipped": 4218,
+      "orderItems": 3777,
+      "orderedRevenue": 88132.4,
+      "shippedRevenue": 88260.77,
+      "conv": 0.0282,
+      "withTraffic": 360,
+      "ivy": {
+        "asin": "B0SMPL0005",
+        "rev": 35.6,
+        "units": 4,
+        "shippedRev": 53.4,
+        "shipped": 6,
+        "orderItems": 3
+      }
+    },
+    "orders": {
+      "rows": 140,
+      "units": 343
+    },
+    "sellbriteUnits": 336
+  }
+}

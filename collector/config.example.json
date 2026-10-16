@@ -1,0 +1,19 @@
+{
+  "_comment": "Copy to config.local.json (git-ignored) and replace every <...> value. No secrets in this file: the Worker ingest secret lives in Windows Credential Manager under ingestCredentialTarget.",
+  "adminUrl": "https://admin.shopify.com/store/<store-handle>",
+  "reportId": "<numeric id of the saved report, from its admin URL>",
+  "workerUrl": "https://sb-plant-breakdown.<account>.workers.dev",
+  "ingestCredentialTarget": "sb-pb-ingest",
+  "timeZone": "America/Los_Angeles",
+  "currency": "USD",
+  "_browserChannelComment": "null = Playwright's bundled Chromium. Use \"chrome\" or \"msedge\" if the bundled build will not start on this PC.",
+  "browserChannel": null,
+  "_signInWaitComment": "Minutes a headed run waits for a person to finish signing in (2FA) before giving up. 0-120.",
+  "signInWaitMinutes": 30,
+  "localDir": null,
+  "_periodsComment": "What a scheduled run collects (dates in timeZone). daily: kinds collected every run. monthlyOnDay: on this day of the month, also collect the previous full month.",
+  "periods": {
+    "daily": ["month-to-date"],
+    "monthlyOnDay": 2
+  }
+}

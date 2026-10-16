@@ -1,0 +1,11 @@
+{
+  "name": "sb-plant-breakdown-worker",
+  "private": true,
+  "type": "module",
+  "description": "Shared report store for sb-plant-breakdown (Cloudflare Worker + D1). Not deployed.",
+  "scripts": {
+    "test": "node --test ../tests/worker-*.test.mjs",
+    "migrate:local": "wrangler d1 migrations apply sb-plant-breakdown --local",
+    "dev": "wrangler dev"
+  }
+}
