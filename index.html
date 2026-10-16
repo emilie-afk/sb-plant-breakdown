@@ -110,18 +110,37 @@
   .modal-box h2{margin-top:0;color:var(--accent)}
   .modal-box .right{text-align:right;margin-top:12px}
   .small{font-size:11px;color:var(--muted)}
+  .scopebar{background:#f3f8f3;border-color:#cfe3cf}
+  .scopebar select{min-width:150px}
+  .badge.gt-genus{background:#e8f5e9;color:#1b5e20}
+  .badge.gt-category{background:#ede7f6;color:#4527a0}
+  .badge.newprod{background:#e3f2fd;color:#0d47a1}
+  .badge.excl{background:#fff3e0;color:#e65100}
+  .prov{font-size:12px;color:var(--muted);display:flex;gap:18px;flex-wrap:wrap;align-items:center}
+  .prov b{color:var(--ink);font-weight:600}
+  .prov .warn{color:#b26a00}
+  tr.excluded-row{background:#fffaf2;color:#8a6d3b}
+  .badge.ovr{background:#ede7f6;color:#4527a0;border:1px solid #b39ddb}
+  .badge.flagq{background:#fff8e1;color:#8a6d00;border:1px solid #ffd54f}
+  .pager{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:10px;
+         padding:8px 10px;background:#f7faf7;border:1px solid var(--border);border-radius:8px}
+  .pager-ctl{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .pager-ctl select,.pager-ctl input{padding:4px 6px;border:1px solid var(--border);border-radius:5px;font-size:12px}
+  .pager-ctl button[disabled]{opacity:.4;cursor:default}
+  #di-key{flex:1;min-width:180px;padding:6px 8px;border:1px solid var(--border);border-radius:6px}
 </style>
 </head>
 <body>
 
 <h1>🌵 Succulents Box — Sales Breakdown Analyzer</h1>
-<div class="sub">Upload Amazon or Shopify exports. Everything is processed in your browser — nothing is uploaded to any server. Saved snapshots persist for next visit.</div>
+<div class="sub">Upload Amazon or Shopify exports. Files you drop are parsed in your browser and saved in this browser. To share reports across browsers and computers, connect shared storage under Data &amp; imports — nothing is uploaded until you choose to.</div>
 
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:12px;flex-wrap:wrap">
   <div class="tabs" style="align-items:center;flex-wrap:wrap">
     <span class="tier-header owned">Owned</span>
-    <button class="tab-btn active" data-tab="amazon">📦 Amazon</button>
-    <button class="tab-btn" data-tab="shopify">🛒 Shopify</button>
+    <button class="tab-btn active" data-tab="shopify">🛒 Shopify</button>
+    <button class="tab-btn" data-tab="vendors">🏷 Vendors</button>
+    <button class="tab-btn" data-tab="amazon">📦 Amazon</button>
     <span style="width:1px;background:var(--border);align-self:stretch;margin:0 4px"></span>
     <span class="tier-header external">Market</span>
     <button class="tab-btn" data-tab="external">🏪 External Stores</button>
@@ -129,21 +148,45 @@
     <button class="tab-btn" data-tab="cross">⇆ Cross-channel</button>
     <button class="tab-btn" data-tab="ovm">⇆ Owned vs Market</button>
     <button class="tab-btn" data-tab="oppmap">🎯 Opportunity Map</button>
+    <span style="width:1px;background:var(--border);align-self:stretch;margin:0 4px"></span>
+    <button class="tab-btn" data-tab="data">⚙ Data &amp; imports</button>
   </div>
   <button class="tab" id="manage-btn">⚙ Manage snapshots</button>
 </div>
 
 <!-- ============== AMAZON ============== -->
-<div class="tab-panel" id="tab-amazon" style="display:block">
+<div class="tab-panel" id="tab-amazon">
   <div class="picker">
-    <label>Snapshot</label><select id="amazon-snap-select"></select>
+    <label>Report</label><select id="amazon-snap-select"></select>
     <label>vs Compare</label><select id="amazon-compare-select"></select>
     <div class="right">
       <button class="tab" id="amazon-addfile-btn">+ Add file</button>
       <button class="tab" id="amazon-download">⬇ Clean data</button>
-      <button class="tab" id="amazon-download-breakdown">⬇ Breakdown (genus + all plants)</button>
+      <button class="tab" id="amazon-download-breakdown">⬇ Breakdown (group + all products)</button>
     </div>
   </div>
+
+  <!-- Same shared-scope contract as the Shopify tab. -->
+  <div class="picker scopebar" id="az-scopebar" style="display:none">
+    <label>Measure</label>
+    <select id="az-measure">
+      <option value="net">Ordered product sales</option>
+      <option value="units">Units ordered</option>
+      <option value="glance">Glance views</option>
+      <option value="inv">Available inventory</option>
+    </select>
+    <label>Group</label><select id="az-group"></select>
+    <label>Scope</label>
+    <select id="az-plantscope">
+      <option value="all">All products</option>
+      <option value="plants">Plants only</option>
+      <option value="nonplants">Non-plant products only</option>
+    </select>
+    <input id="az-search" placeholder="Search product or ASIN…" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;min-width:180px">
+    <label style="text-transform:none;letter-spacing:0"><input type="checkbox" id="az-flagged" style="vertical-align:middle"> Flagged only</label>
+    <button class="tab" id="az-reset">Reset</button>
+  </div>
+
   <div class="dropzone" id="amazon-dropzone">
     <div class="dz-msg">📂 Drop file here, or click to browse</div>
     <div class="dz-sub">Accepts Amazon metric-data .xlsx or .csv</div>
@@ -151,22 +194,60 @@
   </div>
   <div class="banner" id="amazon-mode-banner"></div>
   <div id="amazon-empty" class="empty" style="display:block">Drop an Amazon metric-data file above to get started.</div>
+
   <div id="amazon-content" style="display:none">
+    <div class="panel" id="az-provenance" style="padding:12px 16px"></div>
     <div class="panel" id="amazon-insights" style="display:none"></div>
     <div class="grid cards" id="amazon-cards"></div>
+
     <div class="panel">
-      <div class="panel-h"><h2>Top 25 genera by revenue</h2></div>
+      <div class="panel-h">
+        <h2>Product breakdown — top 25 groups</h2>
+        <span class="small" id="az-chart-note"></span>
+      </div>
       <div class="chart-box"><canvas id="amazon-chart"></canvas></div>
     </div>
+
     <div class="panel">
-      <div class="panel-h"><h2>Genus summary <span class="pill" id="amazon-genus-count"></span></h2></div>
-      <div class="filterbar"><input id="amazon-genus-search" placeholder="Search genus…"></div>
+      <div class="panel-h">
+        <h2>Product breakdown <span class="pill" id="amazon-genus-count"></span></h2>
+        <div class="actions"><button class="tab" id="az-group-download">⬇ Download groups CSV</button></div>
+      </div>
+      <div class="filterbar"><input id="amazon-genus-search" placeholder="Search group…"></div>
       <div class="scroll"><table><thead><tr id="amazon-genus-thead"></tr></thead><tbody id="amazon-genus-tbody"></tbody></table></div>
-      <div class="small" style="margin-top:6px">Click any row to drill into the plants in that genus.</div>
+      <div class="small" style="margin-top:6px">
+        Plants are grouped by <strong>genus</strong>; everything else by <strong>product category</strong>.
+        Every product belongs to exactly one group, so the groups add back up to the included total.
+        Click any row for the full product table.
+      </div>
     </div>
+
+    <div class="panel" id="az-flag-panel">
+      <div class="panel-h"><h2>Classifications to review <span class="pill" id="az-flag-count"></span></h2></div>
+      <div class="flag-body"></div>
+    </div>
+
+    <div class="panel" id="amazon-drill" style="display:none">
+      <div class="panel-h">
+        <h2 id="amazon-drill-title">Drill-down</h2>
+        <div class="actions">
+          <button class="tab active" data-filter="all">All products</button>
+          <button class="tab" data-filter="ge100">≥ $100 only</button>
+          <button class="tab" id="az-drill-download">⬇ Download CSV</button>
+          <button class="tab" id="amazon-close-drill">Close</button>
+        </div>
+      </div>
+      <div class="filterbar">
+        <input id="amazon-prod-search" placeholder="Search product…">
+        <span class="pill" id="amazon-drill-count"></span>
+      </div>
+      <div class="scroll"><table><thead><tr id="amazon-prod-thead"></tr></thead><tbody id="amazon-prod-tbody"></tbody></table></div>
+      <div id="az-drill-pager"></div>
+    </div>
+
     <div class="panel" id="amazon-top-plants">
       <div class="panel-h">
-        <h2 id="amazon-tp-heading">High-revenue plants</h2> <span class="pill" id="amazon-tp-count"></span>
+        <h2 id="amazon-tp-heading">High-revenue products</h2> <span class="pill" id="amazon-tp-count"></span>
         <div class="actions">
           <span class="small">Threshold:</span>
           <button class="tab" data-threshold="100">≥ $100</button>
@@ -178,22 +259,22 @@
       </div>
       <div class="scroll" style="max-height:520px"><table><thead><tr id="amazon-tp-thead"></tr></thead><tbody id="amazon-tp-tbody"></tbody></table></div>
     </div>
-    <div class="panel" id="amazon-drill" style="display:none">
+
+    <div class="panel" id="az-perf-panel">
       <div class="panel-h">
-        <h2 id="amazon-drill-title">Drill-down</h2>
-        <div class="actions">
-          <button class="tab" data-filter="ge100">≥ $100 only</button>
-          <button class="tab active" data-filter="ge100" style="display:none"></button>
-          <button class="tab" data-filter="all">All plants</button>
-          <button class="tab" id="amazon-close-drill">Close</button>
-        </div>
+        <h2>Product performance <span class="pill" id="az-perf-count"></span></h2>
+        <div class="actions"><button class="tab" id="az-perf-download">⬇ Download CSV</button></div>
       </div>
-      <div class="filterbar">
-        <input id="amazon-prod-search" placeholder="Search plant…">
-        <span class="pill" id="amazon-drill-count"></span>
+      <div class="filterbar"><input id="az-perf-search" placeholder="Search product, ASIN or group…"></div>
+      <div class="scroll" style="max-height:620px"><table><thead><tr id="az-perf-thead"></tr></thead><tbody id="az-perf-tbody"></tbody></table></div>
+      <div id="az-perf-pager"></div>
+      <div class="small" style="margin-top:6px">
+        Every product in the report, plants and non-plants alike, subject only to the filters above.
+        Sorting and search run across the whole filtered set before the page is drawn, and downloads
+        always contain every row in scope.
       </div>
-      <div class="scroll"><table><thead><tr id="amazon-prod-thead"></tr></thead><tbody id="amazon-prod-tbody"></tbody></table></div>
     </div>
+
     <div class="panel">
       <div class="panel-h">
         <h2>Amazon alerts <span class="pill" id="amazon-alerts-count"></span></h2>
@@ -207,40 +288,113 @@
   </div>
 </div>
 
+
 <!-- ============== SHOPIFY ============== -->
-<div class="tab-panel" id="tab-shopify">
+<div class="tab-panel" id="tab-shopify" style="display:block">
   <div class="picker">
-    <label>Snapshot</label><select id="shopify-snap-select"></select>
+    <label>Report</label><select id="shopify-snap-select"></select>
     <label>vs Compare</label><select id="shopify-compare-select"></select>
     <div class="right">
       <button class="tab" id="shopify-addfile-btn">+ Add file</button>
       <button class="tab" id="shopify-download">⬇ Clean data</button>
-      <button class="tab" id="shopify-download-breakdown">⬇ Breakdown (genus + all plants)</button>
+      <button class="tab" id="shopify-download-breakdown">⬇ Breakdown (group + all products)</button>
     </div>
   </div>
+
+  <!-- Shared scope. Every card, chart, table, comparison and download below
+       reads this one object, so a vendor filter cannot mean one thing in the
+       chart and another in the export. -->
+  <div class="picker scopebar" id="shopify-scopebar" style="display:none">
+    <label>Measure</label>
+    <select id="sb-measure">
+      <option value="net">Net sales</option>
+      <option value="total">Total sales (incl. tax)</option>
+      <option value="gross">Gross sales</option>
+      <option value="units">Net items sold</option>
+    </select>
+    <label>Vendor</label><select id="sb-vendor"></select>
+    <label>Type</label><select id="sb-ptype"></select>
+    <label>Group</label><select id="sb-group"></select>
+    <label class="sb-chan-l">Channel</label>
+    <select id="sb-channel" title="Amazon orders reach Shopify through Sellbrite">
+      <option value="own">Own store (excl. Amazon via Sellbrite)</option>
+      <option value="amazon">Amazon via Sellbrite only</option>
+      <option value="all">All channels</option>
+    </select>
+    <label>Scope</label>
+    <select id="sb-plantscope">
+      <option value="all">All products</option>
+      <option value="plants">Plants only</option>
+      <option value="nonplants">Non-plant products only</option>
+    </select>
+    <input id="sb-search" placeholder="Search product…" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;min-width:170px">
+    <label style="text-transform:none;letter-spacing:0"><input type="checkbox" id="sb-flagged" style="vertical-align:middle"> Flagged only</label>
+    <button class="tab" id="sb-reset">Reset</button>
+  </div>
+
   <div class="dropzone" id="shopify-dropzone">
     <div class="dz-msg">📂 Drop file here, or click to browse</div>
     <div class="dz-sub">Accepts Shopify "Total sales by product" .csv or .xlsx</div>
     <input type="file" id="shopify-file-input" accept=".csv,.xlsx,.xls">
   </div>
   <div class="banner" id="shopify-mode-banner"></div>
-  <div id="shopify-empty" class="empty" style="display:block">Drop a Shopify CSV above to get started.</div>
+  <div id="shopify-empty" class="empty" style="display:block">Drop a Shopify "Total sales by product" export above to get started.</div>
+
   <div id="shopify-content" style="display:none">
+    <div class="panel" id="sb-provenance" style="padding:12px 16px"></div>
     <div class="panel" id="shopify-insights" style="display:none"></div>
     <div class="grid cards" id="shopify-cards"></div>
+
     <div class="panel">
-      <div class="panel-h"><h2>Top 25 genera by revenue</h2></div>
+      <div class="panel-h">
+        <h2>Product breakdown — top 25 groups</h2>
+        <span class="small" id="sb-chart-note"></span>
+      </div>
       <div class="chart-box"><canvas id="shopify-chart"></canvas></div>
     </div>
+
     <div class="panel">
-      <div class="panel-h"><h2>Genus summary <span class="pill" id="shopify-genus-count"></span></h2></div>
-      <div class="filterbar"><input id="shopify-genus-search" placeholder="Search genus…"></div>
+      <div class="panel-h">
+        <h2>Product breakdown <span class="pill" id="shopify-genus-count"></span></h2>
+        <div class="actions">
+          <button class="tab" id="sb-group-download">⬇ Download groups CSV</button>
+        </div>
+      </div>
+      <div class="filterbar"><input id="shopify-genus-search" placeholder="Search group…"></div>
       <div class="scroll"><table><thead><tr id="shopify-genus-thead"></tr></thead><tbody id="shopify-genus-tbody"></tbody></table></div>
-      <div class="small" style="margin-top:6px">Click any row to drill into the plants in that genus.</div>
+      <div class="small" style="margin-top:6px">
+        Plants are grouped by <strong>genus</strong>; everything else by <strong>product category</strong>.
+        Every product belongs to exactly one group, so the groups add back up to the included total.
+        Click any row for the full product table.
+      </div>
     </div>
+
+    <div class="panel" id="sb-flag-panel">
+      <div class="panel-h"><h2>Classifications to review <span class="pill" id="sb-flag-count"></span></h2></div>
+      <div class="flag-body"></div>
+    </div>
+
+    <div class="panel" id="shopify-drill" style="display:none">
+      <div class="panel-h">
+        <h2 id="shopify-drill-title">Drill-down</h2>
+        <div class="actions">
+          <button class="tab active" data-filter="all">All products</button>
+          <button class="tab" data-filter="ge100">≥ $100 only</button>
+          <button class="tab" id="sb-drill-download">⬇ Download CSV</button>
+          <button class="tab" id="shopify-close-drill">Close</button>
+        </div>
+      </div>
+      <div class="filterbar">
+        <input id="shopify-prod-search" placeholder="Search product…">
+        <span class="pill" id="shopify-drill-count"></span>
+      </div>
+      <div class="scroll"><table><thead><tr id="shopify-prod-thead"></tr></thead><tbody id="shopify-prod-tbody"></tbody></table></div>
+      <div id="sb-drill-pager"></div>
+    </div>
+
     <div class="panel" id="shopify-top-plants">
       <div class="panel-h">
-        <h2 id="shopify-tp-heading">High-revenue plants</h2> <span class="pill" id="shopify-tp-count"></span>
+        <h2 id="shopify-tp-heading">High-revenue products</h2> <span class="pill" id="shopify-tp-count"></span>
         <div class="actions">
           <span class="small">Threshold:</span>
           <button class="tab" data-threshold="100">≥ $100</button>
@@ -252,23 +406,87 @@
       </div>
       <div class="scroll" style="max-height:520px"><table><thead><tr id="shopify-tp-thead"></tr></thead><tbody id="shopify-tp-tbody"></tbody></table></div>
     </div>
-    <div class="panel" id="shopify-drill" style="display:none">
+
+    <div class="panel" id="sb-perf-panel">
       <div class="panel-h">
-        <h2 id="shopify-drill-title">Drill-down</h2>
+        <h2>Product performance <span class="pill" id="sb-perf-count"></span></h2>
         <div class="actions">
-          <button class="tab active" data-filter="ge100">≥ $100 only</button>
-          <button class="tab" data-filter="all">All plants</button>
-          <button class="tab" id="shopify-close-drill">Close</button>
+          <button class="tab" id="sb-perf-download">⬇ Download CSV</button>
         </div>
       </div>
-      <div class="filterbar">
-        <input id="shopify-prod-search" placeholder="Search plant…">
-        <span class="pill" id="shopify-drill-count"></span>
+      <div class="filterbar"><input id="sb-perf-search" placeholder="Search product, vendor or group…"></div>
+      <div class="scroll" style="max-height:620px"><table><thead><tr id="sb-perf-thead"></tr></thead><tbody id="sb-perf-tbody"></tbody></table></div>
+      <div id="sb-perf-pager"></div>
+      <div class="small" style="margin-top:6px">
+        Every product in the report, plants and non-plants alike, subject only to the filters above and the
+        explicit exclusions shown at the top. Rows are <strong>products</strong>: this export carries no SKU,
+        product id or variant id, so variant counts cannot be derived from it.
       </div>
-      <div class="scroll"><table><thead><tr id="shopify-prod-thead"></tr></thead><tbody id="shopify-prod-tbody"></tbody></table></div>
     </div>
   </div>
 </div>
+
+<!-- ============== VENDORS ============== -->
+<div class="tab-panel" id="tab-vendors">
+  <div class="picker">
+    <label>Report</label><select id="vendors-snap-select"></select>
+    <label>vs Compare</label><select id="vendors-compare-select"></select>
+    <div class="right">
+      <button class="tab" id="vendors-download">⬇ Download vendor summary</button>
+    </div>
+  </div>
+  <div class="picker scopebar" id="vendors-scopebar" style="display:none">
+    <label>Measure</label>
+    <select id="vn-measure">
+      <option value="net">Net sales</option>
+      <option value="total">Total sales (incl. tax)</option>
+      <option value="gross">Gross sales</option>
+      <option value="units">Net items sold</option>
+    </select>
+    <label>Type</label><select id="vn-ptype"></select>
+    <label class="vn-chan-l">Channel</label>
+    <select id="vn-channel" title="Amazon orders reach Shopify through Sellbrite">
+      <option value="own">Own store (excl. Amazon via Sellbrite)</option>
+      <option value="amazon">Amazon via Sellbrite only</option>
+      <option value="all">All channels</option>
+    </select>
+    <label>Scope</label>
+    <select id="vn-plantscope">
+      <option value="all">All products</option>
+      <option value="plants">Plants only</option>
+      <option value="nonplants">Non-plant products only</option>
+    </select>
+    <input id="vn-search" placeholder="Search product…" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;min-width:170px">
+    <button class="tab" id="vn-reset">Reset</button>
+  </div>
+  <div id="vendors-empty" class="empty" style="display:block">
+    Import a Shopify "Total sales by product" report on the Shopify tab to see vendor analytics.
+  </div>
+  <div id="vendors-content" style="display:none">
+    <div class="panel" id="vn-provenance" style="padding:12px 16px"></div>
+    <div class="grid cards" id="vn-cards"></div>
+    <div class="panel">
+      <div class="panel-h">
+        <h2>Vendor summary <span class="pill" id="vn-count"></span></h2>
+      </div>
+      <div class="scroll"><table><thead><tr id="vn-thead"></tr></thead><tbody id="vn-tbody"></tbody></table></div>
+      <div class="small" style="margin-top:6px">
+        Every product type is included. Click a vendor to open its full breakdown.
+      </div>
+    </div>
+    <div class="panel" id="vn-drill" style="display:none">
+      <div class="panel-h">
+        <h2 id="vn-drill-title">Vendor</h2>
+        <div class="actions">
+          <button class="tab" id="vn-drill-download">⬇ Download vendor products</button>
+          <button class="tab" id="vn-drill-close">Close</button>
+        </div>
+      </div>
+      <div id="vn-drill-body"></div>
+    </div>
+  </div>
+</div>
+
 
 <!-- ============== EXTERNAL STORES (Market) ============== -->
 <div class="tab-panel tier-external" id="tab-external">
@@ -538,6 +756,10 @@
     </div>
   </div>
 </div>
+</div><!-- closes #tab-cross (was missing on main, which nested later panels and modals inside it) -->
+
+<!-- ============== DATA & IMPORTS ============== -->
+<div class="tab-panel" id="tab-data"><div id="di-root"></div></div>
 
 <div class="modal" id="manage-modal">
   <div class="modal-box">
@@ -551,8 +773,19 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
 <script src="genus-data.js"></script>
+<script src="shopify-report.js"></script>
+<script src="amazon-parse.js"></script>
+<script src="amazon-report.js"></script>
+<script src="product-grouping.js"></script>
+<script src="shared-sync.js"></script>
+<script src="breakdown-ui.js"></script>
+<script src="classification-review.js"></script>
 <script src="exclusions.js"></script>
 <script src="app.js"></script>
+<script src="shopify-views.js"></script>
+<script src="amazon-views.js"></script>
+<script src="data-imports-view.js"></script>
+<script src="channel-guard.js"></script>
 
 </body>
 </html>
