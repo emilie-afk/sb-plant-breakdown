@@ -223,7 +223,7 @@
       }
     } else if (AUTO.status === "loading") head = "Loading the latest saved Shopify report…";
     else if (AUTO.status === "none") head = "<b>No saved Shopify report yet.</b> Reports appear here automatically after the daily collection.";
-    else if (AUTO.status === "not_connected") head = "<b>Shared storage is not connected in this browser.</b> Open ⚙ Data settings to connect.";
+    else if (AUTO.status === "not_connected") head = "<b>Saved reports are not connected in this browser.</b> Open ⚙ Data settings (top right) to connect.";
     else head = "No Shopify report to show.";
     lines.push(head);
 
@@ -245,8 +245,7 @@
     }
     return '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">' +
       '<div style="display:flex;flex-direction:column;gap:3px">' + lines.map(function (l) { return "<div>" + l + "</div>"; }).join("") + "</div>" +
-      '<div style="display:flex;gap:6px">' + (loadConn() ? '<button class="tab" data-ds-refresh>Refresh</button>' : "") +
-      '<button class="tab" data-ds-open>⚙ Data settings</button></div></div>';
+      '<div style="display:flex;gap:6px">' + (loadConn() ? '<button class="tab" data-ds-refresh>Refresh</button>' : "") + "</div></div>";
   }
   function renderStatus() {
     ["sb-data-status", "vn-data-status"].forEach(function (id) {
@@ -269,7 +268,12 @@
     m.style.display = "flex";
     render();
     if (loadConn() && !DI.busy) refresh();
-    if (section) { var el = document.getElementById(section); if (el) el.scrollIntoView({ block: "start" }); }
+    if (section) {
+      var el = document.getElementById(section);
+      var adv = document.getElementById("ds-advanced");
+      if (el && adv && adv.contains(el)) adv.open = true;
+      if (el) el.scrollIntoView({ block: "start" });
+    }
   }
   function closeSettings() { var m = modal(); if (m) m.style.display = "none"; }
   window.SBDataSettings = { open: openSettings, close: closeSettings, refresh: autoLoad };
@@ -289,12 +293,18 @@
 
   function render() {
     var root = document.getElementById("di-root");
+    var advRoot = document.getElementById("di-advanced");
     if (!root) return;
     var c = loadConn();
-    var parts = [];
+    var main = [];
+    var parts = [];   // Advanced settings
+
+    main.push(sourcesPanel(c));
+    if (c && DI.history) main.push(historyPanel());
+    else if (c && DI.busy) main.push('<div class="panel small" id="ds-history-panel">Loading report history…</div>');
 
     parts.push(
-      '<div class="panel" id="ds-connection"><div class="panel-h"><h2>Shared storage connection</h2>' +
+      '<div class="panel" id="ds-connection"><div class="panel-h"><h2>Connection</h2>' +
       '<span class="small">' + (!c ? "Not connected — reports live only in this browser"
         : c.builtIn ? "Using the read-only connection built into this dashboard" : "Connected with a key saved in this browser") + "</span></div>" +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
@@ -315,23 +325,16 @@
     );
 
     if (c && DI.reports) {
-      var st = window.sharedImportStatus(DI.reports, DI.runs, { staleDays: staleDays(), expect: ["shopify", "amazon"],
+      // Only real problems are alerts here. Amazon is optional and uploaded by
+      // hand, so having no Amazon report is not one.
+      var st = window.sharedImportStatus(DI.reports, DI.runs, { staleDays: staleDays(), expect: ["shopify"],
         today: new Date().toISOString().slice(0, 10) });
-      if (st.alerts.length) {
-        parts.push('<div class="panel" style="border-color:#ffcc80;background:#fffaf2">' + st.alerts.map(function (a) {
+      var alerts = st.alerts.filter(function (a) { return a.source === "shopify" || a.level === "error"; });
+      if (alerts.length) {
+        parts.push('<div class="panel" id="ds-alerts" style="border-color:#ffcc80;background:#fffaf2">' + alerts.map(function (a) {
           return '<div style="margin:2px 0">' + (a.level === "error" ? "⛔ " : "⚠ ") + esc(a.message) + "</div>";
         }).join("") + "</div>");
       }
-      parts.push('<div class="grid cards">' + ["shopify", "amazon"].map(function (src) {
-        var s = st.sources[src];
-        return '<div class="card"><div class="label">' + src + (src === "amazon" ? " (manual uploads)" : " (automatic)") + '</div><div class="value">' +
-          (s.latestPeriod ? esc(s.latestPeriod.start) + " → " + esc(s.latestPeriod.end) : "no reports") + '</div><div class="sub">' +
-          s.reports + " report(s) · last successful import " +
-          (s.lastSuccessfulImport ? esc(when(s.lastSuccessfulImport)) : "never") +
-          (s.lastRun ? "<br>last attempt: <b>" + esc(s.lastRun.outcome) + "</b>" : "") + "</div></div>";
-      }).join("") + "</div>");
-
-      parts.push(historyPanel());
       var superseded = window.sharedPickCurrent(DI.reports).superseded;
       parts.push('<div class="panel" id="ds-reports"><div class="panel-h"><h2>Reports in shared storage <span class="pill">' + DI.reports.length + "</span></h2>" +
         '<span class="small">Overlapping periods are kept as separate reports and are never added together.</span></div>' +
@@ -401,8 +404,41 @@
       "Amazon reports are uploaded by hand. A report is marked stale when its newest period ended more than " +
       '<input id="di-stale" type="number" min="1" max="90" value="' + staleDays() + '" style="width:50px"> days ago.</div></div>');
 
-    root.innerHTML = parts.join("");
+    root.innerHTML = main.join("");
+    if (advRoot) advRoot.innerHTML = parts.join("");
+    // Technical details stay folded away unless something needs them.
+    var adv = document.getElementById("ds-advanced");
+    if (adv && (!c || DI.error) && !adv._userToggled) adv.open = true;
     wire();
+  }
+
+  // ---- Data sources: what feeds the dashboard, in plain words ----------
+  function sourcesPanel(c) {
+    var col = AUTO.collection;
+    var shop;
+    if (!c) {
+      shop = '<div><b>Shopify</b> · not connected in this browser</div>' +
+        '<div class="small">Reports cannot load automatically here. <a href="#" data-ds-advanced>Set up the connection</a> under Advanced settings.</div>';
+    } else if (AUTO.status === "offline" || DI.error) {
+      shop = '<div><b>Shopify</b> · could not reach saved reports just now</div>' +
+        '<div class="small">The last saved analysis stays on screen. Try Refresh; details are under Advanced settings.</div>';
+    } else {
+      shop = '<div><b>Shopify connected</b> · Updates automatically</div>' +
+        '<div class="small">Last updated ' + (col && col.lastSuccessAt ? esc(when(col.lastSuccessAt)) : "—") +
+        (col && col.failure ? ' · <span style="color:#b71c1c">the last automatic collection failed (' + esc(when(col.failureAt)) +
+          '); see Advanced settings → Troubleshooting</span>' : "") + "</div>";
+    }
+    var az = (DI.reports || AUTO.reports || []).filter(function (r) { return r.source === "amazon"; });
+    var latestAz = az.slice().sort(function (a, b) { return b.period_end.localeCompare(a.period_end); })[0];
+    var amazon = az.length
+      ? '<div><b>Amazon</b> · ' + az.length + " report" + (az.length === 1 ? "" : "s") + ", latest " +
+        esc(window.periodRangeText(latestAz.period_start, latestAz.period_end)) + '</div><div class="small">Uploaded by hand</div>'
+      : '<div><b>Amazon</b></div><div class="small" style="color:var(--muted)">No Amazon reports yet</div>';
+    return '<div class="panel" id="ds-sources"><div class="panel-h"><h2>Data sources</h2></div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border)">' +
+        '<div>' + shop + "</div>" + (c ? '<button class="tab" id="ds-src-refresh">Refresh</button>' : "") + "</div>" +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 0">' +
+        '<div>' + amazon + '</div><button class="tab" data-upload="amazon">Upload Amazon report</button></div></div>';
   }
 
   // ---- report history: every revision, coverage, gaps, downloads ----
@@ -419,7 +455,7 @@
     }).join("<br>");
     var filter = DI.histFilter || "shopify";
     var rows = hist.filter(function (r) { return filter === "all" || r.source === filter; });
-    return '<div class="panel" id="ds-history-panel"><div class="panel-h"><h2>Report history <span class="pill">' + hist.length + " revisions</span></h2>" +
+    return '<div class="panel" id="ds-history-panel"><div class="panel-h"><h2>Report history <span class="pill">' + hist.length + " revision" + (hist.length === 1 ? "" : "s") + "</span></h2>" +
       '<select id="ds-hist-filter"><option value="shopify"' + (filter === "shopify" ? " selected" : "") + '>Shopify</option>' +
       '<option value="amazon"' + (filter === "amazon" ? " selected" : "") + '>Amazon</option><option value="all"' + (filter === "all" ? " selected" : "") + ">All</option></select></div>" +
       '<div class="small" style="margin-bottom:6px">' + cov + "<br>Every revision is kept. The active revision is used by default; earlier ones can be opened or downloaded. " +
@@ -618,6 +654,10 @@
     document.querySelectorAll("[data-di-pull]").forEach(function (b) { b.onclick = function () { pullSetting(b.getAttribute("data-di-pull")); }; });
     document.querySelectorAll("[data-hist-dl]").forEach(function (b) { b.onclick = function () { downloadRevision(b.getAttribute("data-hist-dl")); }; });
     document.querySelectorAll("[data-hist-open]").forEach(function (b) { b.onclick = function () { openRevision(b.getAttribute("data-hist-open")); }; });
+    if (g("ds-src-refresh")) g("ds-src-refresh").onclick = function () { refresh(); autoLoad(); };
+    document.querySelectorAll("[data-ds-advanced]").forEach(function (a) {
+      a.onclick = function (e) { e.preventDefault(); var d = g("ds-advanced"); if (d) { d.open = true; d.scrollIntoView({ block: "start" }); } };
+    });
     if (g("ds-hist-filter")) g("ds-hist-filter").onchange = function (e) { DI.histFilter = e.target.value; render(); };
   }
 
@@ -641,6 +681,16 @@
     document.querySelectorAll("[data-open-settings]").forEach(function (b) {
       b.addEventListener("click", function () { openSettings(b.getAttribute("data-open-settings") || null); });
     });
+    // "Upload Amazon report" buttons open the file picker directly.
+    document.addEventListener("click", function (e) {
+      var b = e.target.closest && e.target.closest('[data-upload="amazon"]');
+      if (!b) return;
+      e.preventDefault();
+      var fi = document.getElementById("amazon-file-input");
+      if (fi) fi.click();
+    });
+    var adv = document.getElementById("ds-advanced");
+    if (adv) adv.addEventListener("toggle", function () { adv._userToggled = true; });
     var ds = document.getElementById("ds-refresh-now");
     if (ds) ds.onclick = function () { autoLoad(); refresh(); };
     // A report picked by hand stays picked until the person asks for the latest.

@@ -80,7 +80,7 @@ npm run collect
 .\windows\check-task.ps1                  # read-only: state, next run, last result, scheduled or manual
 ```
 
-`check-task.ps1` counts the last run as a **verified scheduled run** only when it started within 10 minutes after the trigger time, finished with result 0 and `run-task.ps1` logged collector exit 0. A collector run started by hand (`npm run collect`) never goes through the task; a task started by hand ("Run" in Task Scheduler) is reported as manual.
+`check-task.ps1` reports a **verified scheduled run** only when, for one Task Scheduler instance, the history shows the time trigger (event 107, not the hand-started 110), the start (100), the action finishing with result 0 (201) and completion (102), and `run-task.ps1`'s collector log for that instance ends `done (exit 0)` with every period uploaded or unchanged. Start time alone is never enough. If Task Scheduler history is off, it reports **not verified**; an administrator turns it on with Task Scheduler → Action → **Enable All Tasks History**. A collector run started by hand (`npm run collect`) never goes through the task at all.
 
 - **Choosing the time.** Pick a local time at least an hour after midnight in Los Angeles: for example 16:00 or later at UTC+7, or 07:15 Pacific time.
 - **What runs.** The task runs `windows\run-task.ps1` as the signed-in user. Logs go to `%LOCALAPPDATA%\sb-plant-breakdown-collector\logs` and are kept for 90 days.

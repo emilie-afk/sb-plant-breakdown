@@ -109,9 +109,13 @@
           var vals = used.map(function (r) { return r.capabilities ? r.capabilities[k] : undefined; });
           if (vals.some(function (v) { return v !== undefined; })) caps[k] = vals.every(function (v) { return v === true || (v === undefined && k === "hasRevenue"); });
         });
-        caps.mixedChannelCapture = used.some(function (r) { return r.capabilities && r.capabilities.hasSalesChannel; }) && !caps.hasSalesChannel;
+        var coverage = plan.revisionsUsed.map(function (u) {
+          var r = reportById(u.reportId);
+          return { month: u.month, start: u.start, end: u.end, hasChannel: !!(r && r.capabilities && r.capabilities.hasSalesChannel) };
+        });
         snap = window.periodBuildSnapshot(src, plan, src === "shopify" ? cmp : null, recs, {
-          capabilities: caps, timezone: used[0] && used[0].timezone, currency: used[0] && used[0].currency,
+          capabilities: caps, channelCoverage: src === "shopify" ? coverage : null,
+          timezone: used[0] && used[0].timezone, currency: used[0] && used[0].currency,
           lastActivatedAt: used.map(function (r) { return r.activated_at || r.imported_at; }).sort().pop()
         });
         snapshots = snapshots.filter(function (x) { return x.id !== snap.id; });
@@ -203,8 +207,9 @@
       if (src === "amazon" && shown && shown.meta && shown.meta.inventoryAsOf) {
         notes.push("Inventory is point-in-time: the latest report's figure, as of " + esc(shown.meta.inventoryAsOf) + " (never added across months).");
       }
-      if (shown && shown.meta && shown.meta.capabilities && shown.meta.capabilities.mixedChannelCapture) {
-        notes.push('<span style="color:#8a5a00">⚠ Some months in this period have no Sales channel column, so their Shopify figures include Amazon orders via Sellbrite and cannot be split.</span>');
+      if (src === "shopify" && shown && window.shopifyChannelStatus) {
+        var ov = window.shopifyOverlapNote(window.shopifyChannelStatus(shown));
+        if (ov) notes.push('<span style="color:#8a5a00">⚠ ' + esc(ov) + "</span>");
       }
     }
     notes.push('<span class="small">History from ' + esc(av.earliest) + (av.gaps.length ? ' · <span style="color:#8a5a00">no report for ' + av.gaps.map(esc).join(", ") + "</span>" : " · no gaps") +

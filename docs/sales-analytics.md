@@ -14,7 +14,7 @@ node tools/make-sample-fixtures.mjs   # regenerate the synthetic fixtures
 
 ## Architecture
 
-`app.js` is unchanged. New files load after it and replace a few globals (`parseShopify`, `handleFile`, `renderTab`, `parseAmazon`, `addSnapshot`). External Stores, Cross-channel, Owned vs Market and Opportunity Map keep running against the code they were written for.
+`app.js` is changed in one place only: the Cross-channel tab decides whether Shopify + Amazon may be combined from the Sales channel rule below, instead of an April 2026 date switch. New files load after it and replace a few globals (`parseShopify`, `handleFile`, `renderTab`, `parseAmazon`, `addSnapshot`). External Stores, Cross-channel, Owned vs Market and Opportunity Map keep running against the code they were written for.
 
 | File | Role |
 |---|---|
@@ -71,43 +71,23 @@ The "classifications to review" panel lists rows where the imported type disagre
 
 ## Sales channels and marketplace orders
 
-When marketplace orders are synced into Shopify (here through Sellbrite), Shopify reports already contain them:
+Amazon orders are synced into Shopify through Sellbrite, so Shopify reports can contain them:
 
-- **Splitting by channel.** If the saved report also groups by **Sales channel**, the Shopify and Vendors tabs offer a channel filter: own store (default), marketplace via Sellbrite, or all channels. A product's channel rows are merged only when a scope spans several channels, so totals never change.
-- **Cross-channel tabs.** These read Shopify as own store only, so marketplace orders are counted once, from the Amazon report.
-- **Reports without the channel column.** When the period reaches the configured sync start date (`SHOPIFY_AMAZON_VIA_SHOPIFY_SINCE` in `shopify-report.js`), the dashboard says the report includes marketplace orders and cannot separate them.
-- **The Amazon tab.** It shows the Sellbrite rows of a Shopify report for the same period beside the Seller Central figures, as a cross-check that is never summed.
-
-## Opening the dashboard
-
-- **No file needed.** After the site password, the dashboard connects to shared storage (with the read-only key built into the encrypted page, or a key entered once under Data settings), opens the newest saved Shopify report and shows it.
-- **Status strip.** Above the Shopify and Vendors analysis: the sales period (store dates, month to date marked partial), the report's revision and when it was collected and imported, the last successful collection ("Last updated"), and any collection or refresh failure. A failure never replaces the last successful analysis.
-- **Data settings** (button, not a tab): connection, report history, import history, manual upload (Amazon's normal route, Shopify's fallback), snapshots and backup, catalog notes and troubleshooting.
-
-## Periods: month, quarter, year
-
-| Rule | How |
+| Period | Amazon orders inside Shopify |
 |---|---|
-| One report per month | the active (latest successful) revision of the full-month report, otherwise the newest month-to-date report. Older month-to-date copies, superseded revisions, quarter or custom-range reports are kept but never combined. |
-| Quarters and years | Q1 Jan–Mar, Q2 Apr–Jun, Q3 Jul–Sep, Q4 Oct–Dec; built from those monthly reports. The revisions used are listed. |
-| Missing months | missing, never zero: the period is labelled partial and the months are named. |
-| Running periods | month to date, quarter to date, year to date, with the actual coverage dates. |
-| Sums | units, gross sales, discounts, returns, net, taxes, total and glance views are summed. |
-| Derived figures | average per unit = combined net ÷ combined units; conversion = combined units ÷ combined glance views; percentage change from the combined totals. |
-| Products | counted once across the whole period (by product id, otherwise title + vendor + type). |
-| Inventory | point in time: the latest report's figure, with its date; never summed. |
-| Comparison | previous equivalent period, or the same period last year, from stored reports covering the same days. A month-to-date part needs a stored report for exactly the shifted dates. For a single month with no such report, Shopify's own previous-period columns inside that one report are shown, with their dates. Embedded previous-period columns are never added across months. |
-| Filters | vendor, product type, group (genus / category), channel and plant scope apply to the combined period exactly as to one report. |
+| before March 2026 | none: no overlap |
+| March 2026 | some: a **partial-month** overlap; the exact start date is unknown |
+| April 2026 onward | every day: full-month overlap |
 
-## The key built into the page
-
-`build.sh` refuses to build unless `SB_SHARED_KEY` is the Worker's **read-only viewer key**. Before inlining, `tools/check-viewer-key.mjs` asks the Worker (without writing anything): a settings write with an empty body must be refused with 403 and a report listing must succeed. The collector key fails the listing; the dashboard key gets 400 instead of 403. After StatiCrypt, the build checks that the output is encrypted and that neither the key nor app code appears in plain text. The unencrypted intermediate file lives only in a temp folder that is always deleted, and `dist/` and `_work/` are git-ignored.
-
-Anyone who knows the site password can unlock the page and extract the viewer key. With it they can read report history, nothing more.
-
-## Report history
-
-Each stored report keeps: source and scope, sales period, timezone and currency, collection time, successful-import time, revision, partial / complete, totals and (when the importer computed them) the included and excluded totals. Re-collecting a period with different figures adds a revision and keeps the earlier one; identical figures write nothing (they only update "last confirmed", and mark the report complete if its period has since ended). Failed imports leave the active revision in place. Every revision can be opened or downloaded as CSV from Data settings → Report history.
+- **With a Sales channel column** (the saved report groups by it): Sellbrite rows are recognised by their actual channel value and left out of Shopify's own-store contribution before anything is compared or combined with Seller Central Amazon figures. This needs no start date, so it works for March 2026 too.
+  - The Shopify and Vendors tabs offer a channel filter: own store (default), Amazon via Sellbrite, or all channels. A product's channel rows are merged only when a scope spans several channels, so totals never change.
+  - Cross-channel, Opportunity Map and Owned vs Market read Shopify as own store only, so Amazon is counted once, from the Amazon report.
+- **Without the column:**
+  - a report ending before March 1, 2026 holds no Amazon orders and is used as is;
+  - any report touching March 2026 or later (including Q1 2026 and the year 2026) **may** include Amazon orders. The dashboard says so, keeps Shopify and Amazon totals separate, and never shows a combined Shopify + Amazon figure as deduplicated. On the Cross-channel tab the combined column and Amazon share read "—"; on the market views, owned totals are labelled "not deduplicated".
+- **Combined periods** are judged month by month (`meta.channelCoverage`): Q1 2026 built from a January and February without the column and a March with it is safe; the same quarter with a March lacking the column is flagged, naming March.
+- **The Amazon tab** shows the Sellbrite rows of a Shopify report for the same period beside the Seller Central figures, as a cross-check that is never summed.
+- The dates are settings in `shopify-report.js` (`SHOPIFY_AMAZON_VIA_SHOPIFY_SINCE` = 2026-03-01, `SHOPIFY_AMAZON_VIA_SHOPIFY_FULL_FROM` = 2026-04-01).
 
 ## Known limits of the data sources
 
@@ -161,7 +141,7 @@ See `collector/README.md`. It exports the saved report through the normal report
 | `worker/setup-cloudflare.ps1` | **deploys** the Worker, **generates and replaces** both Worker keys (Cloudflare secrets + Windows Credential Manager), points the local collector config at the Worker |
 | `worker/update-worker.ps1 [-AddOrigin https://…]` | **applies** pending migrations, optionally **adds** a browser origin, **deploys** the Worker, and **creates** the read-only viewer key only if none exists (or re-sets the stored one if the Worker rejects it). Does not rotate the other keys. Ends with `verify-worker.ps1` and exits nonzero if any check fails. |
 | `worker/verify-worker.ps1 -Url https://…` | changes nothing: health ok, `/v1/reports` without a key → 401, the stored viewer key → 200, report-history fields present, viewer writes → 403, collector coverage → 200 |
-| `collector/windows/check-task.ps1` | changes nothing: task state, trigger, next run, last result, and whether the last run was a **verified scheduled run** (started by the trigger, result 0, collector exit 0) or one started by hand |
+| `collector/windows/check-task.ps1` | changes nothing: task state, trigger, next run, last result, and a **verified scheduled run** only when Task Scheduler history ties one instance's time trigger, start, result 0 and completion to a clean collector log; otherwise *not verified* |
 | `node tools/acceptance-live.mjs https://<site>` | changes nothing: a fresh visible Chrome, a person types the site password, then automatic checks of auto-load, history, CSV, quarter/year totals, missing months and reload |
 | Netlify env `SB_SHARED_URL`, `SB_SHARED_KEY` | build the Worker address and the **read-only** viewer key into the encrypted page, so browsers load reports without a key |
 | `collector/windows/install-task.ps1 -At HH:mm -Apply` | **installs** the daily scheduled task (without `-Apply` it only prints the proposal; `-Uninstall` removes it) |

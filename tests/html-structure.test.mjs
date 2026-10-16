@@ -72,3 +72,22 @@ test('the built-in shared connection is a placeholder in the source', () => {
   assert.match(raw, /name="sb-shared-url" content="__SB_SHARED_URL__"/);
   assert.match(raw, /name="sb-shared-key" content="__SB_SHARED_KEY__"/);
 });
+
+test('Data settings has three sections; technical details sit in a collapsed Advanced settings', () => {
+  const panel = body.slice(body.indexOf('id="data-settings-modal"'), body.indexOf('id="manage-modal"'));
+  assert.match(panel, /<details class="panel" id="ds-advanced">/, 'Advanced settings is a collapsible section, closed by default');
+  assert.doesNotMatch(panel, /<details[^>]*\bopen\b/, 'collapsed by default');
+  const adv = panel.slice(panel.indexOf('id="ds-advanced"'));
+  for (const id of ['di-advanced', 'amazon-dropzone', 'shopify-dropzone', 'manage-btn', 'ds-trouble']) assert.match(adv, new RegExp('id="' + id + '"'));
+  assert.doesNotMatch(panel, /href="#ds-connection"|href="#ds-reports"|href="#ds-upload"/, 'no row of navigation links');
+  assert.equal((body.match(/id="data-settings-btn"/g) || []).length, 1, 'one Data settings button, in the header');
+  const js = fs.readFileSync(path.join(ROOT, 'data-imports-view.js'), 'utf8');
+  assert.doesNotMatch(js, /data-ds-open>⚙ Data settings/, 'the status strip has no second Data settings button');
+  assert.match(js, /Shopify connected<\/b> · Updates automatically/);
+  assert.match(js, /No Amazon reports yet/);
+  assert.match(js, /expect: \["shopify"\]/, 'a missing Amazon report is not an alert');
+  // The connection form is rendered into Advanced settings, not the main view.
+  const render = js.slice(js.indexOf('function render()'), js.indexOf('function sourcesPanel'));
+  assert.ok(render.indexOf('id="ds-connection"') > render.indexOf('var parts = [];'), 'connection form goes to the advanced list');
+  assert.match(render, /advRoot\.innerHTML = parts\.join/);
+});
