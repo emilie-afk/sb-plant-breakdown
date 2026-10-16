@@ -6,10 +6,12 @@
 // an Amazon report, which would count those orders twice.
 //
 // This module makes those tabs read Shopify as OWN STORE ONLY whenever the
-// Shopify report carries a Sales channel column, so Amazon is counted once
-// (from the Amazon report). When the column is missing and the period
-// reaches the configured sync start date (SHOPIFY_AMAZON_VIA_SHOPIFY_SINCE),
-// the tab says plainly that Shopify includes Amazon.
+// Shopify report carries a Sales channel column: Sellbrite rows are left out
+// by their channel value, so Amazon is counted once (from the Amazon report),
+// including in March 2026 when the sync started on an unknown day.
+// Without the column, a report ending before March 2026 holds no Amazon
+// orders; one touching March 2026 or later MAY hold them, and the tab says the
+// totals are kept separate and are not deduplicated (shopifyOverlapNote).
 // app.js is not edited: its data functions are wrapped, and the wrapped call
 // sees a view of the snapshot list in which those Shopify reports hold only
 // their own-store rows. Stored data is never changed.
@@ -33,7 +35,7 @@
   }
   function viewList(list) {
     return list.map(function (s) {
-      return s && s.source === "shopify" && !s.isCatalog && SR.shopifyChannelStatus(s).hasChannel ? ownStoreView(s) : s;
+      return s && s.source === "shopify" && !s.isCatalog && SR.shopifyChannelStatus(s).anyChannel ? ownStoreView(s) : s;
     });
   }
 
@@ -80,17 +82,18 @@
     var snap = id ? snapshots.find(function (s) { return s.id === id; }) : null;
     if (!snap) return "";
     var st = SR.shopifyChannelStatus(snap);
-    if (st.hasChannel) {
+    var out = [];
+    if (st.anyChannel) {
       var a = st.totals.amazon;
-      return "Shopify figures on this tab are <b>own store only</b>. Amazon orders that reached Shopify through Sellbrite (" +
-        money(a.net) + " net, " + count(a.units) + " units in “" + esc(snap.label) + "”) are left out, so Amazon is counted once, from the Amazon report.";
+      out.push("Shopify figures on this tab are <b>own store only</b>. Amazon orders that reached Shopify through Sellbrite (" +
+        money(a.net) + " net, " + count(a.units) + " units in “" + esc(snap.label) + "”) are left out by their Sales channel value, " +
+        "so Amazon is counted once, from the Amazon report.");
     }
     if (st.mayIncludeAmazon) {
-      return "⚠ The selected Shopify report (“" + esc(snap.label) + "”) has no Sales channel column and covers " +
-        st.amazonSince.slice(0, 7) + " or later, so its figures <b>include Amazon orders</b> that came through Sellbrite. " +
-        "Adding it to an Amazon report here counts those orders twice. Re-export the saved Shopify report, which now includes Sales channel.";
+      out.push("⚠ “" + esc(snap.label) + "”: " + esc(SR.shopifyOverlapNote(st)) +
+        " Any Shopify + Amazon figure on this tab is <b>not deduplicated</b>.");
     }
-    return "";
+    return out.join("<br>");
   }
   function placeNote(tab) {
     var panel = document.getElementById("tab-" + tab);
@@ -130,8 +133,8 @@
           ? " (" + (diff > 0 ? "+" : "") + count(diff) + " — small gaps come from order timing, cancellations and time zones)"
           : " (" + (diff > 0 ? "+" : "") + count(diff) + " — ⚠ a large gap: check both reports cover the same dates and that Sellbrite carries only Amazon orders)") +
         ". These are the same Amazon orders seen from two systems and are never added together.";
-    } else if (az.endDate >= SR.SHOPIFY_AMAZON_VIA_SHOPIFY_SINCE) {
-      html = "From " + SR.SHOPIFY_AMAZON_VIA_SHOPIFY_SINCE.slice(0, 7) + " these Amazon orders also appear in Shopify (Sellbrite channel). " +
+    } else if (SR.shopifySellbriteOverlap(az.startDate, az.endDate).potential) {
+      html = "Amazon orders also appear in Shopify (Sellbrite channel) from an unknown day in March 2026 and every day from April 2026. " +
         "Import a Shopify report with a Sales channel column for exactly " + esc(az.startDate) + " → " + esc(az.endDate) + " to cross-check them here.";
     }
     if (!html) return;

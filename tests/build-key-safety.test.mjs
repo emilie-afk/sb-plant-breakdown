@@ -58,3 +58,19 @@ test('generated HTML is never tracked', () => {
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   assert.match(html, /content="__SB_SHARED_KEY__"/, 'the source page holds only the placeholder');
 });
+
+test('a build without shared-storage settings still works and keeps the manual-upload fallback', (t) => {
+  if (!fs.existsSync(path.join(ROOT, 'node_modules', 'lz-string'))) { t.skip('needs `npm install` (lz-string) to run inline.js'); return; }
+  const out = path.join(fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'sbb-')), 'index.html');
+  const e = Object.assign({}, process.env); delete e.SB_SHARED_URL; delete e.SB_SHARED_KEY;
+  const r = spawnSync(process.execPath, ['inline.js', out], { cwd: ROOT, env: e, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /not built in/);
+  const html = fs.readFileSync(out, 'utf8');
+  assert.match(html, /name="sb-shared-url" content=""/);
+  assert.match(html, /name="sb-shared-key" content=""/);
+  for (const id of ['shopify-file-input', 'amazon-file-input', 'data-settings-btn', 'di-connect']) {
+    assert.ok(html.includes(id), id + ' present: manual upload and connecting by hand still work');
+  }
+  fs.rmSync(path.dirname(out), { recursive: true, force: true });
+});

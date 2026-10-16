@@ -65,7 +65,26 @@ try {
   pass('latest saved report loads without a file upload', /Sales period:/.test(status1) && (await page.locator('input[type=file]:visible').count()) === 0,
        { status: status1.slice(0, 260) });
   pass('no Data & imports tab in the navigation', (await page.locator('[data-tab="data"]').count()) === 0);
-  pass('collection timestamps are shown', /Last updated/.test(status1) && /imported \d/.test(status1), { collected: /collected \d/.test(status1) });
+  pass('sales period, revision, collection time and import time are shown separately',
+       /Sales period:/.test(status1) && /Revision \d+/.test(status1) && /collected \d/.test(status1) && /imported \d/.test(status1) && /Last updated/.test(status1),
+       { status: status1.slice(0, 400) });
+  pass('a running or incomplete period is labelled partial', !/month to date/.test(status1) || /partial/.test(status1));
+  if (!/Sales period:/.test(status1)) throw new Error('No saved report is on screen (is the built-in read-only connection in this deploy?); the remaining checks need one.');
+  // All product types: the default scope covers every product type in the report.
+  const types = await page.evaluate(() => {
+    const snap = snapshots.find(s => s.id === state.shopify.snapshotId);
+    const inReport = new Set(snap.products.map(p => p.ptype));
+    const opts = [...document.querySelectorAll('#sb-ptype option')].map(o => o.value).filter(v => v !== 'All');
+    return { selected: document.querySelector('#sb-ptype').value, inReport: inReport.size, inFilter: opts.length,
+             groupScope: document.querySelector('#sb-plantscope').value };
+  });
+  pass('Shopify analysis covers all product types by default', types.selected === 'All' && types.groupScope === 'all' && types.inFilter >= types.inReport - 1, types);
+  await page.click('[data-tab="vendors"]'); await page.waitForTimeout(2500);
+  const vend = await page.evaluate(() => ({ ptype: document.querySelector('#vn-ptype').value, scope: document.querySelector('#vn-plantscope').value,
+                                           cards: (document.querySelector('#vn-cards')?.innerText || '').replace(/\s+/g, ' ').slice(0, 200) }));
+  pass('vendor analytics covers all product types by default', vend.ptype === 'All' && vend.scope === 'all' && /VENDORS/i.test(vend.cards), vend);
+  await shot('1b-vendors');
+  await page.click('[data-tab="shopify"]'); await page.waitForTimeout(1500);
   await shot('1-opened');
 
   // Quarter and year: combined totals equal the sum of the monthly reports used.
@@ -96,9 +115,15 @@ try {
     await shot('2-' + kind);
   }
 
-  // Report history and CSV download.
+  // Data settings, report history, CSV download.
   await page.click('#data-settings-btn');
   await page.waitForSelector('#ds-history-panel tbody tr', { timeout: 30000 });
+  const sources = await text('#ds-sources');
+  const advOpen = await page.evaluate(() => document.getElementById('ds-advanced').open);
+  const conn = await page.evaluate(() => (document.getElementById('ds-connection')?.textContent || '').replace(/\s+/g, ' '));
+  pass('Data settings opens: Shopify connected, technical details folded away, built-in read-only connection',
+       await page.locator('#data-settings-modal').isVisible() && /Shopify connected · Updates automatically/.test(sources) && !advOpen &&
+       /read-only connection built into/.test(conn), { sources: sources.slice(0, 200), advancedOpen: advOpen });
   const rows = await page.locator('#ds-history-panel tbody tr').count();
   pass('report history lists stored revisions', rows > 0, { revisions: rows, superseded: (await text('#ds-history-panel')).includes('superseded') });
   const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('#ds-history-panel [data-hist-dl]').first().click()]);
@@ -111,7 +136,13 @@ try {
   pass('CSV download of a revision matches the stored row count', dataRows === expect, { file: dl.suggestedFilename(), dataRows, storedRows: expect,
        meta: lines.slice(0, 7) });
   await shot('3-history');
-  await page.click('#data-settings-close');
+  // Open the oldest stored revision on its own, for inspection.
+  const openBtns = page.locator('#ds-history-panel [data-hist-open]');
+  await openBtns.nth((await openBtns.count()) - 1).click();
+  await page.waitForTimeout(5000);
+  const opened = await text('#sb-data-status');
+  pass('a historical report opens from the history', /Sales period:/.test(opened), { status: opened.slice(0, 220) });
+  await shot('3b-opened-history');
 
   // Reload: period, timestamps and any failure survive.
   await page.selectOption('[data-pv-kind="shopify"]', 'month'); await page.waitForTimeout(4000);

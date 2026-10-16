@@ -454,24 +454,24 @@
     var st = SR.shopifyChannelStatus(snap);
     var sel = document.getElementById(prefix + "-channel");
     var lab = document.querySelector("." + prefix + "-chan-l");
-    if (sel) { sel.style.display = st.hasChannel ? "" : "none"; sel.value = SBS.scope.channel; }
-    if (lab) lab.style.display = st.hasChannel ? "" : "none";
+    if (sel) { sel.style.display = st.anyChannel ? "" : "none"; sel.value = SBS.scope.channel; }
+    if (lab) lab.style.display = st.anyChannel ? "" : "none";
   }
   function channelNote(snap) {
     var st = SR.shopifyChannelStatus(snap);
-    if (st.hasChannel) {
+    var parts = [];
+    if (st.anyChannel) {
       var t = st.totals, ch = SBS.scope.channel;
       var amz = t.amazon, own = t.own;
-      return "<b>Sales channel:</b> " + CHANNEL_LABELS[ch] + ". Own store " + money(own.net) + " net / " + count(own.units) +
+      parts.push("<b>Sales channel:</b> " + CHANNEL_LABELS[ch] + ". Amazon orders are told apart by their Sales channel value (Sellbrite), not by date. Own store " + money(own.net) + " net / " + count(own.units) +
         " units · Amazon via Sellbrite " + money(amz.net) + " net / " + count(amz.units) + " units · all channels " +
         money(round2(own.net + amz.net)) + ". Channels: " + t.channels.map(function (c) {
-          return esc(c.channel) + " " + money(c.cur.net); }).join(", ") + ".";
+          return esc(c.channel) + " " + money(c.cur.net); }).join(", ") + "." +
+        (st.hasChannel ? "" : " (Only the months that carry a Sales channel column are split.)"));
     }
-    if (st.mayIncludeAmazon) {
-      return "⚠ <b>Includes Amazon orders.</b> From " + st.amazonSince.slice(0, 7) + " Amazon orders reach Shopify through Sellbrite, " +
-        "and this report has no Sales channel column to separate them, so these figures are own store + Amazon. " +
-        "Re-export the saved report “Total sales by product + ID (sb-plant-breakdown)”, which now includes Sales channel.";
-    }
+    if (st.mayIncludeAmazon) parts.push("⚠ " + esc(SR.shopifyOverlapNote(st)) +
+      " Re-export the saved report “Total sales by product + ID (sb-plant-breakdown)”, which includes Sales channel.");
+    if (parts.length) return parts.join("<br>");
     return "";
   }
   function round2(v) { return Math.round((v + Number.EPSILON) * 100) / 100; }
@@ -1015,7 +1015,7 @@
       ["# Currency", m.currency || ""],
       ["# Filters", "vendor=" + SBS.scope.vendor + "; type=" + SBS.scope.ptype + "; group=" + SBS.scope.group +
                     "; scope=" + SBS.scope.plantScope + "; search=" + (SBS.scope.search || "-") + "; measure=" + SBS.scope.measure + "; flaggedOnly=" + !!SBS.scope.flagged +
-                    (SR.shopifyChannelStatus(snap).hasChannel ? "; channel=" + SBS.scope.channel : (SR.shopifyChannelStatus(snap).mayIncludeAmazon ? "; channel=not in report (includes Amazon via Sellbrite)" : ""))],
+                    (SR.shopifyChannelStatus(snap).hasChannel ? "; channel=" + SBS.scope.channel : (SR.shopifyChannelStatus(snap).mayIncludeAmazon ? "; channel=not in report (may include Amazon via Sellbrite)" : ""))],
       ["# Exclusions", "Route (shipping protection) excluded from rankings"],
       ["# Percentage change formula", "(current - prior) / abs(prior) * 100"],
       [""]

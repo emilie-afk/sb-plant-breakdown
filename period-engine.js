@@ -395,7 +395,10 @@
                   revisionsUsed: plan.revisionsUsed },
         comparisonInfo: cmp || null,
         inventoryAsOf: latestPart ? latestPart.end : null,
-        distinctProducts: distinctProducts(records.filter(function (r) { return !r.onlyInComparison; }))
+        distinctProducts: distinctProducts(records.filter(function (r) { return !r.onlyInComparison; })),
+        // Which months carry a Sales channel column: decides whether Amazon
+        // orders synced through Sellbrite can be excluded (shopify-report.js).
+        channelCoverage: info.channelCoverage || null
       }
     };
   }

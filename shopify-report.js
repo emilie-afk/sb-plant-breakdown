@@ -50,12 +50,36 @@
   ];
 
   // Amazon orders synced into Shopify by Sellbrite show up there as the
-  // "Sellbrite" sales channel. AMAZON_VIA_SHOPIFY_SINCE is the date that sync
-  // started for this store (a setting, not a measurement): before it, Shopify
-  // reports contain no Amazon orders, so a report without a channel column is
-  // only flagged when its period reaches that date.
+  // "Sellbrite" sales channel. For this store (settings, not measurements):
+  //   before March 2026      no Amazon orders in Shopify: no overlap
+  //   March 2026             PARTIAL-month overlap; the exact start date is unknown
+  //   April 2026 onward      every day overlaps
+  // With a Sales channel column the Sellbrite rows are excluded by their actual
+  // channel value, which works for March too without knowing the start date.
+  // Without it, any period touching March 2026 or later MAY include Amazon
+  // orders, and a Shopify + Amazon total can never be called deduplicated.
   var AMAZON_CHANNEL_RE = /\b(sellbrite|amazon)\b/i;
-  var AMAZON_VIA_SHOPIFY_SINCE = "2026-03-01";
+  var AMAZON_VIA_SHOPIFY_SINCE = "2026-03-01";      // first day overlap is possible
+  var AMAZON_VIA_SHOPIFY_FULL_FROM = "2026-04-01";  // first day of full-month overlap
+
+  // How a date range (store dates) relates to the Sellbrite sync, assuming the
+  // report has NO Sales channel column.
+  //   level 'none'    ends before March 2026: Shopify holds no Amazon orders
+  //   level 'partial' within March 2026: some days may include Amazon orders
+  //   level 'full'    starts April 2026 or later: every day may include them
+  //   level 'mixed'   spans more than one of these phases
+  function sellbriteOverlap(start, end) {
+    start = String(start || ""); end = String(end || start);
+    if (!end || end < AMAZON_VIA_SHOPIFY_SINCE) {
+      return { level: "none", potential: false, text: "before March 2026: no Amazon orders in Shopify" };
+    }
+    var level = start >= AMAZON_VIA_SHOPIFY_FULL_FROM ? "full"
+      : (start >= AMAZON_VIA_SHOPIFY_SINCE && end < AMAZON_VIA_SHOPIFY_FULL_FROM) ? "partial" : "mixed";
+    var text = level === "full" ? "from April 2026 every day may include Amazon orders synced through Sellbrite"
+      : level === "partial" ? "March 2026 is a partial-month overlap: Amazon orders reached Shopify through Sellbrite from an unknown day in March"
+      : "this period reaches March 2026 or later: Amazon orders synced through Sellbrite are in Shopify for part of March (start date unknown) and all of April 2026 onward";
+    return { level: level, potential: true, text: text };
+  }
   function channelGroupOf(name) {
     var s = String(name == null ? "" : name).trim();
     if (!s) return "";
@@ -541,19 +565,48 @@
   }
 
   // What a snapshot says about Amazon orders inside it.
-  //   hasChannel      the report carries the Sales channel column
-  //   mayIncludeAmazon no channel column, and the period reaches the sync start
-  //                    date or later, so Amazon (Sellbrite) orders are mixed
-  //                    in and cannot be separated
+  //   hasChannel        every part of the report carries the Sales channel column,
+  //                     so Sellbrite rows can be excluded by their channel value
+  //   anyChannel        at least one part carries it (the channel filter applies there)
+  //   mayIncludeAmazon  some part has NO channel column and touches March 2026
+  //                     or later: Amazon orders may be mixed in and cannot be
+  //                     separated, so Shopify + Amazon is not deduplicated
+  //   uncovered         those parts ({start, end, level, text})
+  //   dedupSafe         Shopify (own store) + Seller Central Amazon may be added
+  // A combined period snapshot lists its months in meta.channelCoverage.
   function channelStatus(snap) {
     var recs = (snap && snap.products) || [];
-    var hasChannel = !!(snap && snap.meta && snap.meta.capabilities && snap.meta.capabilities.hasSalesChannel) ||
-                     recs.some(function (r) { return !!r.salesChannel; });
-    var end = (snap && (snap.endDate || (snap.meta && snap.meta.current && snap.meta.current.end))) || "";
-    var out = { hasChannel: hasChannel, mayIncludeAmazon: !hasChannel && end >= AMAZON_VIA_SHOPIFY_SINCE,
-                amazonSince: AMAZON_VIA_SHOPIFY_SINCE, totals: null };
-    if (hasChannel) out.totals = channelTotals(recs.filter(function (r) { return r.cur; }));
+    var meta = (snap && snap.meta) || {};
+    var parts;
+    if (Array.isArray(meta.channelCoverage) && meta.channelCoverage.length) {
+      parts = meta.channelCoverage;
+    } else {
+      var has = !!(meta.capabilities && meta.capabilities.hasSalesChannel) || recs.some(function (r) { return !!r.salesChannel; });
+      parts = [{ start: (snap && (snap.startDate || (meta.current && meta.current.start))) || "",
+                 end: (snap && (snap.endDate || (meta.current && meta.current.end))) || "", hasChannel: has }];
+    }
+    var uncovered = parts.filter(function (p) { return !p.hasChannel; }).map(function (p) {
+      var o = sellbriteOverlap(p.start, p.end);
+      return { start: p.start, end: p.end, level: o.level, potential: o.potential, text: o.text };
+    }).filter(function (p) { return p.potential; });
+    var hasChannel = parts.every(function (p) { return p.hasChannel; });
+    var anyChannel = parts.some(function (p) { return p.hasChannel; });
+    var out = { hasChannel: hasChannel, anyChannel: anyChannel, mayIncludeAmazon: uncovered.length > 0, uncovered: uncovered,
+                dedupSafe: uncovered.length === 0, amazonSince: AMAZON_VIA_SHOPIFY_SINCE,
+                amazonFullFrom: AMAZON_VIA_SHOPIFY_FULL_FROM, totals: null };
+    if (anyChannel) out.totals = channelTotals(recs.filter(function (r) { return r.cur && r.salesChannel; }));
     return out;
+  }
+  // One plain sentence for a status from channelStatus(), or "".
+  function overlapNote(st) {
+    if (!st || !st.mayIncludeAmazon) return "";
+    var u = st.uncovered.map(function (p) { return p.start + " → " + p.end; }).join(", ");
+    var level = st.uncovered.length === 1 ? st.uncovered[0].level : "mixed";
+    var why = level === "partial" ? "March 2026 is a partial-month overlap (Amazon orders reached Shopify through Sellbrite from an unknown day in March)"
+      : level === "full" ? "from April 2026 Amazon orders reach Shopify through Sellbrite every day"
+      : "Amazon orders reached Shopify through Sellbrite from an unknown day in March 2026 and every day from April 2026";
+    return "Without a Sales channel column (" + u + "), these Shopify figures may include Amazon orders: " + why +
+      ". Shopify and Amazon totals are kept separate and are not deduplicated.";
   }
 
   function isNewFormatSnapshot(snap) {
@@ -652,6 +705,9 @@
     shopifyChannelGroupOf: channelGroupOf,
     shopifyChannelTotals: channelTotals,
     shopifyChannelStatus: channelStatus,
-    SHOPIFY_AMAZON_VIA_SHOPIFY_SINCE: AMAZON_VIA_SHOPIFY_SINCE
+    SHOPIFY_AMAZON_VIA_SHOPIFY_SINCE: AMAZON_VIA_SHOPIFY_SINCE,
+    SHOPIFY_AMAZON_VIA_SHOPIFY_FULL_FROM: AMAZON_VIA_SHOPIFY_FULL_FROM,
+    shopifySellbriteOverlap: sellbriteOverlap,
+    shopifyOverlapNote: overlapNote
   };
 });

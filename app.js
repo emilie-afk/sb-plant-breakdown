@@ -1145,6 +1145,7 @@ function downloadCross(){
   const sMap = Object.fromEntries(sG.map(g => [g.genus, g]));
   const allG = new Set([...aG.map(g=>g.genus), ...sG.map(g=>g.genus)]);
   const rows = [];
+  const separate = typeof shopifyChannelStatus === "function" && !!shopifyChannelStatus(sSnap).mayIncludeAmazon;
   for (const g of allG){
     const a = aMap[g] || {rev:0, units:0};
     const s = sMap[g] || {rev:0, units:0};
@@ -1156,14 +1157,16 @@ function downloadCross(){
     else if (s.rev > a.rev * 1.1) dominant = `Shopify (${(s.rev/a.rev).toFixed(1)}x)`;
     else dominant = 'Balanced';
     rows.push({Genus: g, "Amazon $": +a.rev.toFixed(2), "Shopify $": +s.rev.toFixed(2),
-               "Combined $": +combined.toFixed(2),
-               "Amazon share": combined > 0 ? a.rev/combined : 0,
+               "Combined $": separate ? null : +combined.toFixed(2),
+               "Amazon share": separate ? null : (combined > 0 ? a.rev/combined : 0),
                "Amazon units": a.units, "Shopify units": s.units,
                "Dominant channel": dominant});
   }
-  rows.sort((a,b) => b["Combined $"] - a["Combined $"]);
+  rows.sort((a,b) => (b["Amazon $"] + b["Shopify $"]) - (a["Amazon $"] + a["Shopify $"]));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Cross-channel");
+  if (separate) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["Note"], [shopifyOverlapNote(shopifyChannelStatus(sSnap))],
+    ["Combined $ and Amazon share are left blank: the Shopify figures may include Amazon orders via Sellbrite and are not deduplicated."]]), "Read me");
   // Opportunities sheets
   const plant = rows.filter(r => r.Genus !== '(no genus)');
   const shopOnly = plant.filter(r => r["Amazon $"] === 0 && r["Shopify $"] > 0)
@@ -1227,26 +1230,18 @@ function renderCross(){
   }
   empty.style.display = "none"; content.style.display = "block";
 
-  // Auto-detect post-April overlap (Amazon counted inside Shopify since 2026-04)
-  const OVERLAP_THRESHOLD = "2026-04-01";
-  const periodOverlaps = aSnap.startDate >= OVERLAP_THRESHOLD || sSnap.startDate >= OVERLAP_THRESHOLD;
-  // Read user override (persisted in localStorage)
-  if (state.cross.overlap === undefined) {
-    state.cross.overlap = (localStorage.getItem("sb-cross-overlap") || "") === "1" || periodOverlaps;
-  }
-  const overlap = state.cross.overlap;
+  // Amazon orders reach Shopify through Sellbrite from an unknown day in March
+  // 2026 and every day from April 2026. Shopify + Amazon is added only when
+  // Shopify cannot contain them: its Sellbrite rows were removed by Sales
+  // channel (channel-guard.js), or its period ends before March 2026.
+  // Otherwise the two totals stay SEPARATE and no combined figure is shown.
+  const ovSt = typeof shopifyChannelStatus === "function" ? shopifyChannelStatus(sSnap) : { mayIncludeAmazon: false };
+  const separate = !!ovSt.mayIncludeAmazon;
+  const overlap = false;   // the old "Amazon is a subset of Shopify" mode assumed a full overlap; it is not used
   const overlapBox = document.getElementById("cross-overlap-box");
-  overlapBox.style.display = "block";
-  overlapBox.innerHTML = `
-    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:#e65100">
-      <input type="checkbox" id="cross-overlap-chk" ${overlap ? 'checked' : ''}>
-      <span><strong>⚠ Amazon revenue is included in Shopify totals</strong> — since April 2026, Amazon sales flow through Shopify. Check this so the combined figures don't double-count.</span>
-    </label>`;
-  document.getElementById("cross-overlap-chk").onchange = e => {
-    state.cross.overlap = e.target.checked;
-    localStorage.setItem("sb-cross-overlap", e.target.checked ? "1" : "0");
-    renderCross();
-  };
+  overlapBox.style.display = separate ? "block" : "none";
+  overlapBox.innerHTML = separate
+    ? `<div style="color:#8a5a00"><strong>⚠ Totals kept separate.</strong> ${shopifyOverlapNote(ovSt)}</div>` : "";
 
   const aGenera = aggregateByGenus(aSnap.products);
   const sGenera = aggregateByGenus(sSnap.products);
@@ -1268,6 +1263,7 @@ function renderCross(){
       sNonAmazon = s.rev;
       aShare = combined > 0 ? a.rev / combined : 0;
     }
+    if (separate) aShare = null;
     cross.push({genus: g, aRev: a.rev, sRev: s.rev, sNonAmazon, aUnits: a.units, sUnits: s.units, combined, aShare});
   }
   cross.sort((a,b) => b.combined - a.combined);
@@ -1283,6 +1279,12 @@ function renderCross(){
       {label:'Amazon (incl. in Shopify)', value: fmt$(aTot), sub: `${(sTot ? Math.min(100, aTot/sTot*100) : 0).toFixed(1)}% of Shopify`},
       {label:'Shopify ex-Amazon', value: fmt$(sNonAmazonTot), sub: `${(sTot ? sNonAmazonTot/sTot*100 : 0).toFixed(1)}% of Shopify`},
       {label:'Total units (Shopify)', value: fmtN(sSnap.products.reduce((s,p)=>s+p.units,0))},
+    ]
+    : separate ? [
+      {label:'Amazon $ (Seller Central)', value: fmt$(aTot)},
+      {label:'Shopify $', value: fmt$(sTot), sub: 'may include Amazon orders via Sellbrite'},
+      {label:'Combined', value: '—', sub: 'not deduplicated for this period'},
+      {label:'Genera both channels', value: fmtN(cross.filter(g => g.aRev > 0 && g.sRev > 0 && g.genus !== '(no genus)').length)}
     ]
     : [
       {label:'Combined revenue', value: fmt$(tot)},
@@ -1312,7 +1314,7 @@ function renderCross(){
     },
     options:{indexAxis:'y', responsive:true, maintainAspectRatio:false,
       plugins:{legend:{display:true, position:'bottom'}, tooltip:{callbacks:{label:c=>c.dataset.label+': '+fmt$(c.parsed.x)}}},
-      scales:{x:{stacked:true, ticks:{callback:fmtAxis}}, y:{stacked:true}}}
+      scales:{x:{stacked:!separate, ticks:{callback:fmtAxis}}, y:{stacked:!separate}}}
   });
 
   // Table
@@ -1322,7 +1324,7 @@ function renderCross(){
   const splitKeys   = ['genus','aRev','sRev','combined','aShare','dominantSort'];
   const cols = overlap
     ? ['Genus','Amazon $','Other Shopify $','Shopify total $','Amazon share of Shopify']
-    : ['Genus','Amazon $','Shopify $','Combined $','Amazon share','Dominant'];
+    : ['Genus','Amazon $','Shopify $' + (separate ? ' (may incl. Amazon)' : ''), separate ? 'Combined (not deduplicated)' : 'Combined $', 'Amazon share','Dominant'];
   // Clamp the sort column if user previously sorted a column that doesn't exist in this mode
   if (state.crossSort.col >= cols.length) state.crossSort.col = 3;
   thead.innerHTML = cols.map((c,i) => {
@@ -1357,7 +1359,7 @@ function renderCross(){
     else if (g.aRev > g.sRev * 1.1) dom = `<span class="badge amazon">Amazon (${(g.aRev/g.sRev).toFixed(1)}×)</span>`;
     else if (g.sRev > g.aRev * 1.1) dom = `<span class="badge shopify">Shopify (${(g.sRev/g.aRev).toFixed(1)}×)</span>`;
     else dom = `<span class="badge balanced">Balanced</span>`;
-    return `<tr class="clickable" data-genus="${g.genus.replace(/"/g,'&quot;')}"><td>${g.genus}</td><td class="num">${fmt$(g.aRev)}</td><td class="num">${fmt$(g.sRev)}</td><td class="num">${fmt$(g.combined)}</td><td class="num">${pctFmt(g.aShare)}</td><td>${dom}</td></tr>`;
+    return `<tr class="clickable" data-genus="${g.genus.replace(/"/g,'&quot;')}"><td>${g.genus}</td><td class="num">${fmt$(g.aRev)}</td><td class="num">${fmt$(g.sRev)}</td><td class="num">${separate ? '—' : fmt$(g.combined)}</td><td class="num">${separate ? '—' : pctFmt(g.aShare)}</td><td>${dom}</td></tr>`;
   }).join('');
   // Wire row-click → drill into plants for that genus
   tbody.querySelectorAll('tr.clickable').forEach(tr =>
@@ -1371,7 +1373,7 @@ function renderCross(){
     renderCross();
   }));
   renderOpportunities(cross, overlap);
-  renderCrossInsights(aSnap, sSnap, overlap);
+  renderCrossInsights(aSnap, sSnap, overlap, separate);
   renderCrossPlantPanel();
 }
 
@@ -1445,6 +1447,7 @@ function closeCrossDrill(){
   document.getElementById("cross-drill").style.display = "none";
 }
 function renderCrossDrill(genus, aSnap, sSnap, overlap){
+  const separate = typeof shopifyChannelStatus === "function" && !!shopifyChannelStatus(sSnap).mayIncludeAmazon;
   const aPlants = aSnap.products.filter(p => p.genus === genus).slice().sort((a,b) => b.rev - a.rev);
   const sPlants = sSnap.products.filter(p => p.genus === genus).slice().sort((a,b) => b.rev - a.rev);
   const aSum = aPlants.reduce((s,p) => s+p.rev, 0);
@@ -1461,7 +1464,7 @@ function renderCrossDrill(genus, aSnap, sSnap, overlap){
     <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px">
       <div class="card" style="flex:1;min-width:170px"><div class="label">Amazon revenue</div><div class="value">${fmt$(aSum)}</div><div class="sub">${aPlants.length} ASINs</div></div>
       <div class="card" style="flex:1;min-width:170px"><div class="label">Shopify revenue</div><div class="value">${fmt$(sSum)}</div><div class="sub">${sPlants.length} SKUs</div></div>
-      <div class="card" style="flex:1;min-width:170px"><div class="label">${shareLabel}</div><div class="value" style="color:#e65100">${pctFmt(share)}</div></div>
+      <div class="card" style="flex:1;min-width:170px"><div class="label">${separate ? 'Amazon share' : shareLabel}</div><div class="value" style="color:#e65100">${separate ? '—' : pctFmt(share)}</div>${separate ? '<div class="sub">not deduplicated for this period</div>' : ''}</div>
     </div>`;
   const sortRows = (rows, sortRef, keys) => {
     const k = keys[sortRef.col];
@@ -1649,7 +1652,7 @@ function renderInsights(source, snap, priSnap){
     </div>`;
 }
 
-function generateCrossInsights(aSnap, sSnap, overlap){
+function generateCrossInsights(aSnap, sSnap, overlap, separate){
   if (!aSnap || !sSnap) return [];
   const aG = aggregateByGenus(aSnap.products);
   const sG = aggregateByGenus(sSnap.products);
@@ -1661,10 +1664,13 @@ function generateCrossInsights(aSnap, sSnap, overlap){
   const combined = overlap ? sTot : aTot + sTot;
   const insights = [];
 
-  // Channel split
-  if (combined > 0){
+  // Channel split (only when Shopify cannot contain the Amazon orders)
+  if (separate){
+    insights.push({icon:"⚠", title:"Totals kept separate", body:
+      `Amazon ${fmt$(aTot)} (Seller Central) and Shopify ${fmt$(sTot)} are shown separately: this Shopify report has no Sales channel column and may include Amazon orders via Sellbrite, so no combined share is calculated.`});
+  } else if (combined > 0){
     if (overlap){
-      insights.push({icon:"🔗", title:"Channels merged (post-April)", body:
+      insights.push({icon:"🔗", title:"Channels merged", body:
         `Amazon accounts for <strong>${pctFmt(sTot > 0 ? aTot/sTot : 0)}</strong> of Shopify total revenue (${fmt$(aTot)} of ${fmt$(sTot)}).`});
     } else {
       insights.push({icon:"⚖", title:"Channel split", body:
@@ -1703,11 +1709,11 @@ function generateCrossInsights(aSnap, sSnap, overlap){
   return insights;
 }
 
-function renderCrossInsights(aSnap, sSnap, overlap){
+function renderCrossInsights(aSnap, sSnap, overlap, separate){
   const el = document.getElementById("cross-insights");
   if (!el) return;
   if (!aSnap || !sSnap){ el.style.display = "none"; return; }
-  const insights = generateCrossInsights(aSnap, sSnap, overlap);
+  const insights = generateCrossInsights(aSnap, sSnap, overlap, separate);
   if (!insights.length){ el.style.display = "none"; return; }
   el.style.display = "block";
   el.innerHTML = `

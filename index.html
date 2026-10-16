@@ -168,7 +168,7 @@
     <label>Report</label><select id="amazon-snap-select"></select>
     <label>vs Compare</label><select id="amazon-compare-select"></select>
     <div class="right">
-      <button class="tab" data-open-settings="ds-upload" title="Amazon reports are uploaded by hand">⬆ Upload Amazon report</button>
+      <button class="tab" data-upload="amazon" title="Amazon reports are uploaded by hand">⬆ Upload Amazon report</button>
       <button class="tab" id="amazon-download">⬇ Clean data</button>
       <button class="tab" id="amazon-download-breakdown">⬇ Breakdown (group + all products)</button>
     </div>
@@ -196,7 +196,7 @@
   </div>
 
   <div class="banner" id="amazon-mode-banner"></div>
-  <div id="amazon-empty" class="empty" style="display:block">No Amazon report yet. Amazon reports are uploaded by hand: open <button class="tab" data-open-settings="ds-upload">⚙ Data settings → Upload a report</button>.</div>
+  <div id="amazon-empty" class="empty" style="display:block">No Amazon reports yet. <button class="tab" data-upload="amazon">Upload Amazon report</button></div>
 
   <div id="amazon-content" style="display:none">
     <div class="panel" id="az-provenance" style="padding:12px 16px"></div>
@@ -337,7 +337,7 @@
   </div>
 
   <div class="banner" id="shopify-mode-banner"></div>
-  <div id="shopify-empty" class="empty" style="display:block">No saved Shopify report yet. Reports appear here automatically after the daily collection; a file can also be uploaded under ⚙ Data settings.</div>
+  <div id="shopify-empty" class="empty" style="display:block">No saved Shopify report yet. Reports appear here automatically after the daily collection.</div>
 
   <div id="shopify-content" style="display:none">
     <div class="panel" id="sb-provenance" style="padding:12px 16px"></div>
@@ -762,50 +762,53 @@
 <!-- ============== DATA SETTINGS (panel, not a tab) ============== -->
 <div class="modal" id="data-settings-modal" role="dialog" aria-label="Data settings">
   <div class="modal-box ds-box">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px">
       <h2 style="margin:0">⚙ Data settings</h2>
       <button class="tab" id="data-settings-close">Close</button>
     </div>
-    <div class="small" style="margin:4px 0 10px">Normal use needs nothing here: the newest saved Shopify report opens automatically.
-      <a href="#ds-connection">Connection</a> · <a href="#ds-history-panel">Report history</a> · <a href="#ds-reports">Reports</a> · <a href="#ds-history">Import history</a> ·
-      <a href="#ds-upload">Upload a report</a> · <a href="#ds-snapshots">Snapshots &amp; backup</a> · <a href="#ds-catalog">Catalog</a> · <a href="#ds-trouble">Troubleshooting</a></div>
+    <!-- Data sources and Report history (data-imports-view.js) -->
     <div id="di-root"></div>
-    <div class="panel" id="ds-upload"><div class="panel-h"><h2>Upload a report</h2>
-      <span class="small">Amazon: the normal way in. Shopify: a fallback when the automatic collection cannot run.</span></div>
-      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px">
-        <div><div class="small" style="margin-bottom:4px"><b>Amazon</b> metric-data export</div>
-        <div class="dropzone" id="amazon-dropzone">
+    <details class="panel" id="ds-advanced">
+      <summary style="cursor:pointer"><b>Advanced settings</b>
+        <span class="small">connection, manual uploads, import history, backups, troubleshooting</span></summary>
+      <div id="di-advanced" style="margin-top:10px"></div>
+      <div class="panel" id="ds-upload"><div class="panel-h"><h2>Manual upload</h2>
+        <span class="small">Amazon reports, or a Shopify export when the automatic collection cannot run.</span></div>
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px">
+          <div><div class="small" style="margin-bottom:4px"><b>Amazon</b> metric-data export</div>
+            <div class="dropzone" id="amazon-dropzone">
     <div class="dz-msg">📂 Drop file here, or click to browse</div>
     <div class="dz-sub">Accepts Amazon metric-data .xlsx or .csv</div>
     <input type="file" id="amazon-file-input" accept=".xlsx,.xls,.csv">
   </div>
-        </div>
-        <div><div class="small" style="margin-bottom:4px"><b>Shopify</b> "Total sales by product" export</div>
-        <div class="dropzone" id="shopify-dropzone">
+          </div>
+          <div><div class="small" style="margin-bottom:4px"><b>Shopify</b> "Total sales by product" export (fallback)</div>
+            <div class="dropzone" id="shopify-dropzone">
     <div class="dz-msg">📂 Drop file here, or click to browse</div>
     <div class="dz-sub">Accepts Shopify "Total sales by product" .csv or .xlsx</div>
     <input type="file" id="shopify-file-input" accept=".csv,.xlsx,.xls">
   </div>
+          </div>
         </div>
+        <div class="small" style="margin-top:6px">Files are read in this browser. A Shopify file for a period that is already saved
+          is shown beside it, never added to it.</div>
       </div>
-      <div class="small" style="margin-top:6px">Files are read in this browser. A Shopify file for a period that is already saved
-        is shown beside it, never added to it.</div>
-    </div>
-    <div class="panel" id="ds-snapshots"><div class="panel-h"><h2>Snapshots &amp; backup</h2></div>
-      <div class="small" style="margin-bottom:6px">Rename, delete, back up or restore the reports saved in this browser.</div>
-      <button class="tab" id="manage-btn">⚙ Manage snapshots</button>
-    </div>
-    <div class="panel" id="ds-catalog"><div class="panel-h"><h2>Catalog</h2></div>
-      <div class="small">The storefront catalog (<code>/products.json</code>) is fetched automatically and cached for 24 hours.
-        Sales rows are matched to it by product id, otherwise by a unique exact title and vendor; ambiguous rows need an approved
-        mapping, kept under Shared settings (<code>catalog_mappings</code>). Product-level sales are never split across variants.</div>
-    </div>
-    <div class="panel" id="ds-trouble"><div class="panel-h"><h2>Troubleshooting</h2></div>
-      <div class="small" style="margin-bottom:6px">If the status above the analysis shows a failed collection: make sure the collector PC is on at the
-        scheduled time and signed in to Shopify (run <code>npm run login</code> in <code>collector/</code> once if asked), then press Refresh.
-        A failed run never replaces the last successful report.</div>
-      <button class="tab" id="ds-refresh-now">Refresh from shared storage now</button>
-    </div>
+      <div class="panel" id="ds-snapshots"><div class="panel-h"><h2>Snapshots &amp; backup</h2></div>
+        <div class="small" style="margin-bottom:6px">Rename, delete, back up or restore the reports saved in this browser.</div>
+        <button class="tab" id="manage-btn">Manage snapshots</button>
+      </div>
+      <div class="panel" id="ds-catalog"><div class="panel-h"><h2>Catalog</h2></div>
+        <div class="small">The storefront catalog (<code>/products.json</code>) is fetched automatically and cached for 24 hours.
+          Sales rows are matched to it by product id, otherwise by a unique exact title and vendor; ambiguous rows need an approved
+          mapping, kept under Shared settings (<code>catalog_mappings</code>). Product-level sales are never split across variants.</div>
+      </div>
+      <div class="panel" id="ds-trouble"><div class="panel-h"><h2>Troubleshooting</h2></div>
+        <div class="small" style="margin-bottom:6px">If a collection failed: make sure the collector PC is on at the scheduled time and
+          signed in to Shopify (run <code>npm run login</code> in <code>collector/</code> once if asked), then press Refresh.
+          A failed run never replaces the last successful report.</div>
+        <button class="tab" id="ds-refresh-now">Refresh from saved reports now</button>
+      </div>
+    </details>
   </div>
 </div>
 
