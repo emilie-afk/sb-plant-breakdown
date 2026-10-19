@@ -138,7 +138,7 @@ async function recordCollectionFailure(req, env) {
   const message = String(b.message == null ? "" : b.message).replace(/https?:\/\/\S+/g, "<url>")
     .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, "<email>").slice(0, 300);
   const runId = await store.startRun(env.DB, {
-    source: b.source === "amazon" ? "amazon" : "shopify", reportScope: typeof b.reportScope === "string" ? b.reportScope.slice(0, 80) : null,
+    source: ["amazon", "market"].indexOf(b.source) >= 0 ? b.source : "shopify", reportScope: typeof b.reportScope === "string" ? b.reportScope.slice(0, 80) : null,
     periodStart: ymd(b.period && b.period.start), periodEnd: ymd(b.period && b.period.end),
     importedBy: "collector", client: typeof b.client === "string" ? b.client.slice(0, 80) : null
   });

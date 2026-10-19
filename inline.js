@@ -16,6 +16,8 @@ const ssy = fs.readFileSync('shared-sync.js', 'utf8');
 const div = fs.readFileSync('data-imports-view.js', 'utf8');
 const pen = fs.readFileSync('period-engine.js', 'utf8');
 const pvw = fs.readFileSync('period-view.js', 'utf8');
+const mrp = fs.readFileSync('market-report.js', 'utf8');
+const mvw = fs.readFileSync('market-view.js', 'utf8');
 const cgd = fs.readFileSync('channel-guard.js', 'utf8');
 const app = fs.readFileSync('app.js', 'utf8');
 const lz  = fs.readFileSync('node_modules/lz-string/libs/lz-string.min.js', 'utf8');
@@ -37,6 +39,8 @@ html = html.replace('<script src="shared-sync.js"></script>', () => '<script>' +
 html = html.replace('<script src="data-imports-view.js"></script>', () => '<script>' + div + '</script>');
 html = html.replace('<script src="period-engine.js"></script>', () => '<script>' + pen + '</script>');
 html = html.replace('<script src="period-view.js"></script>', () => '<script>' + pvw + '</script>');
+html = html.replace('<script src="market-report.js"></script>', () => '<script>' + mrp + '</script>');
+html = html.replace('<script src="market-view.js"></script>', () => '<script>' + mvw + '</script>');
 html = html.replace('<script src="channel-guard.js"></script>', () => '<script>' + cgd + '</script>');
 html = html.replace('<script src="app.js"></script>', () => '<script>' + app + '</script>');
 const mcgPwd = process.env.SB_MCG_PASSWORD || '';
@@ -68,7 +72,7 @@ if (html.includes('src="genus-data.js"') || html.includes('src="exclusions.js"')
     html.includes('src="app.js"') || html.includes('src="shopify-report.js"') ||
     html.includes('src="product-grouping.js"') || html.includes('src="shopify-views.js"') ||
     html.includes('src="amazon-report.js"') || html.includes('src="amazon-parse.js"') || html.includes('src="breakdown-ui.js"') ||
-    html.includes('src="classification-review.js"') || html.includes('src="amazon-views.js"') || html.includes('src="shared-sync.js"') || html.includes('src="data-imports-view.js"') || html.includes('src="period-engine.js"') || html.includes('src="period-view.js"') || html.includes('src="channel-guard.js"') ||
+    html.includes('src="classification-review.js"') || html.includes('src="amazon-views.js"') || html.includes('src="shared-sync.js"') || html.includes('src="data-imports-view.js"') || html.includes('src="period-engine.js"') || html.includes('src="period-view.js"') || html.includes('src="market-report.js"') || html.includes('src="market-view.js"') || html.includes('src="channel-guard.js"') ||
     html.includes('cdn.jsdelivr.net/npm/lz-string')) {
   console.error('!!! Script inlining failed');
   process.exit(1);
@@ -76,7 +80,7 @@ if (html.includes('src="genus-data.js"') || html.includes('src="exclusions.js"')
 if (!html.includes('function detectGenus') || !html.includes('manage-btn') || !html.includes('RESTRICTED_ITEMS') ||
     !html.includes('parseShopifyProductReport') || !html.includes('classifyRecord') ||
     !html.includes('SBShopify') || !html.includes('SBAmazon') || !html.includes('amazonNormalizeSnapshot') ||
-    !html.includes('SBFlagUI') || !html.includes('paginationBar') || !html.includes('parseAmazonMetricData') || !html.includes('SBDataImports') || !html.includes('sharedPayloadFromSnapshot') || !html.includes('periodAuthoritativeMonths') || !html.includes('SBPeriodView')) {
+    !html.includes('SBFlagUI') || !html.includes('paginationBar') || !html.includes('parseAmazonMetricData') || !html.includes('SBDataImports') || !html.includes('sharedPayloadFromSnapshot') || !html.includes('periodAuthoritativeMonths') || !html.includes('SBPeriodView') || !html.includes('marketParseProductSales') || !html.includes('SBMarketView')) {
   console.error('!!! Critical functions missing');
   process.exit(1);
 }

@@ -20,7 +20,7 @@ const CUSTOMER_FIELD_RE =
   /(^|_)(customer|buyer|email|phone|address|addr|ship[_-]?(city|state|postal|zip|country|name)|postal|zip|billing|recipient|ip[_-]?address|cpf|tax[_-]?id)($|_)/i;
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const SOURCES = new Set(["shopify", "amazon"]);
+const SOURCES = new Set(["shopify", "amazon", "market"]);
 const IMPORTERS = new Set(["collector", "manual"]);
 
 function isPlainObject(v) { return v != null && typeof v === "object" && !Array.isArray(v); }
@@ -63,7 +63,7 @@ export function validateProductReport(payload) {
 
   // ---- identity ----
   const source = String(payload.source || "").trim();
-  if (!SOURCES.has(source)) err("bad_source", 'source must be "shopify" or "amazon".');
+  if (!SOURCES.has(source)) err("bad_source", 'source must be "shopify", "amazon" or "market".');
   const scope = String(payload.reportScope || "").trim();
   if (!scope) err("bad_scope", "reportScope is required.");
   if (scope.length > 120) err("bad_scope", "reportScope is too long.");
@@ -144,6 +144,7 @@ export function validateProductReport(payload) {
         // Shopify sales channel (e.g. "Online Store", "Sellbrite"). Part of the
         // row identity when present: one product can appear once per channel.
         salesChannel: r.salesChannel == null || r.salesChannel === "" ? null : String(r.salesChannel).trim().slice(0, 100),
+        sku: r.sku == null || r.sku === "" ? null : String(r.sku).trim().slice(0, 100),
         extra: null,
         cur: {}, prior: null
       };
@@ -336,7 +337,7 @@ export async function contentHash(normalized) {
     // salesChannel is appended only when present, so reports stored before
     // the channel column existed keep the same hash.
     r: normalized.rows.map(r => [r.productId, r.asin, r.title, r.vendor, r.productType, r.extra,
-      MEASURES.map(k => r.cur[k]), r.prior ? MEASURES.map(k => r.prior[k]) : null].concat(r.salesChannel ? [r.salesChannel] : []))
+      MEASURES.map(k => r.cur[k]), r.prior ? MEASURES.map(k => r.prior[k]) : null].concat(r.salesChannel ? [r.salesChannel] : [], r.sku ? ["sku:" + r.sku] : []))
   });
   const bytes = new TextEncoder().encode(canonical);
   const digest = await crypto.subtle.digest("SHA-256", bytes);

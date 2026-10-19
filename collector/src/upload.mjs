@@ -47,7 +47,7 @@ export async function reportFailure(info, { workerUrl, secret, fetchImpl = fetch
     const res = await fetchImpl(u.origin + FAILURE_PATH, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer ' + secret },
-      body: JSON.stringify({ source: 'shopify', reportScope: 'total_sales_by_product', period: info.period || null,
+      body: JSON.stringify({ source: info.source || 'shopify', reportScope: info.reportScope || 'total_sales_by_product', period: info.period || null,
                              errorCode: info.errorCode, message: String(info.message || '').slice(0, 300), client: info.client || null })
     });
     return { ok: res.ok, httpStatus: res.status };
@@ -55,9 +55,9 @@ export async function reportFailure(info, { workerUrl, secret, fetchImpl = fetch
 }
 
 // Which periods shared storage already holds (dates and revision numbers only).
-export async function fetchCoverage({ workerUrl, secret, fetchImpl = fetch } = {}) {
+export async function fetchCoverage({ workerUrl, secret, fetchImpl = fetch, source = 'shopify', scope = 'total_sales_by_product' } = {}) {
   const u = new URL(workerUrl);
-  const res = await fetchImpl(u.origin + '/v1/ingest/coverage?source=shopify&scope=total_sales_by_product', {
+  const res = await fetchImpl(u.origin + '/v1/ingest/coverage?source=' + encodeURIComponent(source) + '&scope=' + encodeURIComponent(scope), {
     headers: { authorization: 'Bearer ' + secret }
   });
   if (!res.ok) throw new Error('coverage request failed (HTTP ' + res.status + ')');

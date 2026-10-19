@@ -6,6 +6,7 @@ const require = createRequire(import.meta.url);
 // the dashboard would refuse.
 const SR = require('../../shopify-report.js');
 const PG = require('../../product-grouping.js');
+const MR = require('../../market-report.js');
 
 export const STORE_TZ = 'America/Los_Angeles';
 export const REPORT_SCOPE = 'total_sales_by_product';
@@ -267,6 +268,23 @@ export function validateExport(text, period, opts = {}) {
   };
 }
 
+// ---- market (ShipStation Product Sales) ----
+// Turns a downloaded Product Sales export into a "market" ingest payload, or
+// explains why not. Own-store (Succulents Box) rows are dropped; the export
+// has no customer or order columns, and one that did would be refused.
+export function validateMarketExport(text, period, opts = {}) {
+  const rows = parseCsv(text);
+  if (!rows.length) return { ok: false, problems: ['The ShipStation export is empty.'] };
+  const res = MR.marketParseProductSales(rows);
+  if (!res.ok) return { ok: false, problems: res.errors };
+  const payload = MR.marketPayloadFromParse(res, period, { timeZone: opts.timeZone, currency: opts.currency,
+    client: opts.client, collectedAt: opts.collectedAt });
+  if (!payload.rows.length) return { ok: false, empty: true, problems: ['No market (non-Succulents Box) sales in this period.'] };
+  return { ok: true, payload, facts: { rows: payload.rows.length, stores: res.stores.filter(s => !s.own).map(s => s.store),
+    marketUnits: res.totals.market.units, marketNet: res.totals.market.net, ownNetDropped: res.totals.own.net,
+    adjustments: res.totals.adjustments.net } };
+}
+
 // Reads "1,234 / 1,111" style Summary cells: the first number is the current period.
 export function parseSummaryNumber(cell) {
   if (cell == null) return null;
@@ -304,6 +322,13 @@ export function validateConfig(cfg) {
     if (!/^\d{4}-\d{2}$/.test(String(P.backfill.earliest || ''))) errs.push('periods.backfill.earliest must be YYYY-MM.');
     const n = P.backfill.maxPerRun;
     if (n != null && !(Number.isInteger(n) && n >= 0 && n <= 6)) errs.push('periods.backfill.maxPerRun must be 0–6.');
+  }
+  if (cfg.shipstation != null) {
+    if (typeof cfg.shipstation !== 'object') errs.push('shipstation must be an object.');
+    else if (cfg.shipstation.baseUrl) {
+      try { if (!/(^|\.)shipstation\.com$/.test(new URL(cfg.shipstation.baseUrl).hostname)) errs.push('shipstation.baseUrl must be on shipstation.com.'); }
+      catch { errs.push('shipstation.baseUrl is not a URL.'); }
+    }
   }
   for (const k of Object.keys(cfg)) {
     if (/secret|password|token|apikey|api_key/i.test(k) && !/CredentialTarget$/.test(k)) errs.push(`Config key "${k}" looks like a secret. Secrets belong in Windows Credential Manager, not the config file.`);
