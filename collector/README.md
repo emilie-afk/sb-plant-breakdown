@@ -35,6 +35,17 @@ No Shopify API, no custom app and no Make.com: it uses the same report screen a 
    - The payload carries the collection time and the included / excluded totals, so the dashboard can show when the data was fetched separately from the sales period.
 7. **Report failures.** When a period cannot be stored (sign-in needed, export failed, file refused by the checks), the collector sends a short failure record to `POST /v1/ingest/collection-failure`. The dashboard shows it above the analysis; the last successful report stays on screen.
 
+## Market data (ShipStation)
+
+With a `shipstation` section in the config (see `config.example.json`), each run also exports ShipStation's **Insights → Reports → Product Sales** report for the same periods as Shopify and uploads it as source `market`:
+
+- product level only (store, SKU, description, units, item revenue): no order numbers, no customer data;
+- Succulents Box's own stores are dropped; coupon and adjustment rows are kept as excluded totals;
+- the report page must show exactly the requested date range, or the file is refused;
+- sign-in works like Shopify's: if ShipStation asks, a normal window opens on the collector's profile for a person to sign in, then close.
+
+Test it without uploading: `node src/collect.mjs --config config.local.json --only market --start 2026-09-01 --end 2026-09-30 --dry-run`.
+
 ## One-time setup (on the PC that will run it)
 
 ```powershell

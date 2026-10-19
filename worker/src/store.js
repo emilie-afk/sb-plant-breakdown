@@ -13,11 +13,11 @@
 // ============================================================
 import { MEASURES } from "./validate.js";
 
-// D1 caps bound parameters per statement at 100. A row has 25 columns, so
+// D1 caps bound parameters per statement at 100. A row has 26 columns, so
 // three rows per INSERT keeps every statement well under the cap.
 const ROW_COLS = ["report_id", "seq", "product_id", "asin", "title", "vendor", "product_type",
   "units", "gross", "disc", "ret", "net", "tax", "total", "glance", "inv",
-  "p_units", "p_gross", "p_disc", "p_ret", "p_net", "p_tax", "p_total", "extra_json", "sales_channel"];
+  "p_units", "p_gross", "p_disc", "p_ret", "p_net", "p_tax", "p_total", "extra_json", "sales_channel", "sku"];
 const ROWS_PER_STMT = 3;
 const STMTS_PER_BATCH = 25;
 
@@ -123,7 +123,7 @@ function fromRow(r) {
   cur.glance = r.glance; cur.inv = r.inv;
   return {
     seq: r.seq, productId: r.product_id, asin: r.asin, title: r.title, vendor: r.vendor,
-    productType: r.product_type, salesChannel: r.sales_channel || null, cur, prior: hasPrior ? prior : null,
+    productType: r.product_type, salesChannel: r.sales_channel || null, sku: r.sku || null, cur, prior: hasPrior ? prior : null,
     extra: r.extra_json ? JSON.parse(r.extra_json) : null
   };
 }
@@ -135,7 +135,7 @@ function rowValues(reportId, r) {
     r.cur.glance || 0, r.cur.inv || 0,
     r.prior ? p.units : null, r.prior ? p.gross : null, r.prior ? p.disc : null, r.prior ? p.ret : null,
     r.prior ? p.net : null, r.prior ? p.tax : null, r.prior ? p.total : null,
-    r.extra ? JSON.stringify(r.extra) : null, r.salesChannel || null];
+    r.extra ? JSON.stringify(r.extra) : null, r.salesChannel || null, r.sku || null];
 }
 
 /**

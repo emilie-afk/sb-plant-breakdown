@@ -39,15 +39,17 @@ export function keepSessionsAcrossRestarts(cfg) {
 
 // Opens a normal window at the admin and waits until the person closes it
 // (or `minutes` pass). Resolves true if the window was closed by the person.
-export async function signInWithNormalWindow(cfg, minutes = 30, log = console.log) {
+export async function signInWithNormalWindow(cfg, minutes = 30, log = console.log, where = {}) {
+  const url = where.url || cfg.adminUrl;
+  const label = where.label || 'Shopify';
   const exe = cfg.browserChannel ? browserExe(cfg) : (await import('playwright')).chromium.executablePath();
   if (!exe || !fs.existsSync(exe)) throw new Error('Browser not found for browserChannel ' + cfg.browserChannel);
   const profile = localPaths(cfg).profile;
   fs.mkdirSync(profile, { recursive: true });
   keepSessionsAcrossRestarts(cfg);
-  log(`Shopify needs a person to sign in. A normal ${cfg.browserChannel || 'Chromium'} window is opening: sign in (and 2FA), ` +
-      `wait for the admin home page, then CLOSE that window.${minutes ? ' Waiting up to ' + minutes + ' min.' : ''}`);
-  const child = spawn(exe, [`--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', '--new-window', cfg.adminUrl], { stdio: 'ignore' });
+  log(`${label} needs a person to sign in. A normal ${cfg.browserChannel || 'Chromium'} window is opening: sign in (and 2FA), ` +
+      `wait for the ${label} home page, then CLOSE that window.${minutes ? ' Waiting up to ' + minutes + ' min.' : ''}`);
+  const child = spawn(exe, [`--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', '--new-window', url], { stdio: 'ignore' });
   const closed = await new Promise(res => {
     const t = minutes ? setTimeout(() => res(false), minutes * 60000) : null;
     child.on('exit', () => { if (t) clearTimeout(t); res(true); });

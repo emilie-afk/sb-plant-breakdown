@@ -12,6 +12,8 @@
   "signInWaitMinutes": 30,
   "localDir": null,
   "_periodsComment": "What a scheduled run collects (dates in timeZone). daily: kinds collected every run. closedMonths: on these days of the month, re-collect the last `lookback` full months so later corrections are kept (an unchanged month writes nothing). backfill: each run also fills up to maxPerRun missing full months, newest first, back to `earliest` (YYYY-MM) or until Shopify returns no data. All proposals: change them freely.",
+  "_shipstationComment": "Market data: ShipStation Insights > Reports > Product Sales, collected for the same periods. baseUrl is the ShipStation host you land on after signing in (for example https://ship<N>.shipstation.com). Remove this section to skip market data.",
+  "shipstation": { "baseUrl": "https://ship.shipstation.com", "backfill": { "earliest": "2024-01", "maxPerRun": 2 } },
   "periods": {
     "daily": ["month-to-date"],
     "closedMonths": { "lookback": 2, "onDays": [1, 2, 9, 16, 23] },

@@ -30,6 +30,8 @@ node tools/make-sample-fixtures.mjs   # regenerate the synthetic fixtures
 | `shopify-views.js`, `amazon-views.js` | Shopify, Vendors and Amazon tabs. |
 | `data-imports-view.js` | Automatic loading of the latest saved report, the status strip above the analysis, and the ⚙ Data settings panel (connection, report history and downloads, import history, uploads, snapshots, shared settings, troubleshooting). |
 | `period-view.js` | The Month / Quarter / Year selector and comparison choice above the Shopify, Vendors and Amazon analysis. |
+| `market-report.js` | Parser and payload for ShipStation's Product Sales export (market data). No DOM. |
+| `market-view.js` | Lines Opportunity Map, Owned vs Market, External Stores and Cross-channel up with the Shopify period on screen. |
 | `channel-guard.js` | Keeps the older cross-channel tabs from counting marketplace orders twice. |
 | `worker/` | Cloudflare Worker + D1: ingest, report history, settings. |
 | `collector/` | Windows collector that exports the saved Shopify report and uploads it. |

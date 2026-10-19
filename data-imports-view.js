@@ -434,9 +434,18 @@
       ? '<div><b>Amazon</b> · ' + az.length + " report" + (az.length === 1 ? "" : "s") + ", latest " +
         esc(window.periodRangeText(latestAz.period_start, latestAz.period_end)) + '</div><div class="small">Uploaded by hand</div>'
       : '<div><b>Amazon</b></div><div class="small" style="color:var(--muted)">No Amazon reports yet</div>';
+    var mk = (DI.reports || AUTO.reports || []).filter(function (r) { return r.source === "market"; });
+    var latestMk = mk.slice().sort(function (a, b) { return b.period_end.localeCompare(a.period_end); })[0];
+    var market = mk.length
+      ? '<div><b>Market (ShipStation)</b> · Updates automatically</div><div class="small">' + mk.length + " period" + (mk.length === 1 ? "" : "s") +
+        ", latest " + esc(window.periodRangeText(latestMk.period_start, latestMk.period_end)) +
+        " · Product Sales report, other stores only (Succulents Box stores left out)</div>"
+      : '<div><b>Market (ShipStation)</b></div><div class="small" style="color:var(--muted)">No market data yet; it is collected with Shopify once the collector is set up for ShipStation</div>';
     return '<div class="panel" id="ds-sources"><div class="panel-h"><h2>Data sources</h2></div>' +
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border)">' +
         '<div>' + shop + "</div>" + (c ? '<button class="tab" id="ds-src-refresh">Refresh</button>' : "") + "</div>" +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border)">' +
+        '<div>' + market + "</div></div>" +
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 0">' +
         '<div>' + amazon + '</div><button class="tab" data-upload="amazon">Upload Amazon report</button></div></div>';
   }
@@ -444,8 +453,8 @@
   // ---- report history: every revision, coverage, gaps, downloads ----
   function historyPanel() {
     var hist = DI.history || [];
-    var cov = ["shopify", "amazon"].map(function (src) {
-      var auth = window.periodAuthoritativeMonths(DI.reports || [], { source: src });
+    var cov = ["shopify", "market", "amazon"].map(function (src) {
+      var auth = window.periodAuthoritativeMonths(DI.reports || [], { source: src, scope: src === "market" ? window.MARKET_SCOPE : undefined });
       var av = window.periodAvailability(auth, {});
       return "<b>" + src + "</b>: " + (av.earliest
         ? "history from " + esc(av.earliest) + " to " + esc(av.latest) +
@@ -457,7 +466,7 @@
     var rows = hist.filter(function (r) { return filter === "all" || r.source === filter; });
     return '<div class="panel" id="ds-history-panel"><div class="panel-h"><h2>Report history <span class="pill">' + hist.length + " revision" + (hist.length === 1 ? "" : "s") + "</span></h2>" +
       '<select id="ds-hist-filter"><option value="shopify"' + (filter === "shopify" ? " selected" : "") + '>Shopify</option>' +
-      '<option value="amazon"' + (filter === "amazon" ? " selected" : "") + '>Amazon</option><option value="all"' + (filter === "all" ? " selected" : "") + ">All</option></select></div>" +
+      '<option value="amazon"' + (filter === "amazon" ? " selected" : "") + '>Amazon</option><option value="market"' + (filter === "market" ? " selected" : "") + '>Market (ShipStation)</option><option value="all"' + (filter === "all" ? " selected" : "") + ">All</option></select></div>" +
       '<div class="small" style="margin-bottom:6px">' + cov + "<br>Every revision is kept. The active revision is used by default; earlier ones can be opened or downloaded. " +
       "Sales period dates are the store's calendar; collected and imported are when the data was fetched and saved.</div>" +
       '<div class="scroll" style="max-height:380px"><table><thead><tr><th>Source</th><th>Sales period</th><th>Status</th><th class="num">Rev.</th>' +
