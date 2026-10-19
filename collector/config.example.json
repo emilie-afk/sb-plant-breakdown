@@ -1,0 +1,22 @@
+{
+  "_comment": "Copy to config.local.json (git-ignored) and replace every <...> value. No secrets in this file: the Worker ingest secret lives in Windows Credential Manager under ingestCredentialTarget.",
+  "adminUrl": "https://admin.shopify.com/store/<store-handle>",
+  "reportId": "<numeric id of the saved report, from its admin URL>",
+  "workerUrl": "https://sb-plant-breakdown.<account>.workers.dev",
+  "ingestCredentialTarget": "sb-pb-ingest",
+  "timeZone": "America/Los_Angeles",
+  "currency": "USD",
+  "_browserChannelComment": "null = Playwright's bundled Chromium. Use \"chrome\" or \"msedge\" if the bundled build will not start on this PC.",
+  "browserChannel": null,
+  "_signInWaitComment": "Minutes a headed run waits for a person to finish signing in (2FA) before giving up. 0-120.",
+  "signInWaitMinutes": 30,
+  "localDir": null,
+  "_periodsComment": "What a scheduled run collects (dates in timeZone). daily: kinds collected every run. closedMonths: on these days of the month, re-collect the last `lookback` full months so later corrections are kept (an unchanged month writes nothing). backfill: each run also fills up to maxPerRun missing full months, newest first, back to `earliest` (YYYY-MM) or until Shopify returns no data. All proposals: change them freely.",
+  "_shipstationComment": "Market data: ShipStation Insights > Reports > Product Sales, collected for the same periods. baseUrl is the ShipStation host you land on after signing in (for example https://ship<N>.shipstation.com). Remove this section to skip market data.",
+  "shipstation": { "baseUrl": "https://ship.shipstation.com", "backfill": { "earliest": "2024-01", "maxPerRun": 2 } },
+  "periods": {
+    "daily": ["month-to-date"],
+    "closedMonths": { "lookback": 2, "onDays": [1, 2, 9, 16, 23] },
+    "backfill": { "earliest": "2024-01", "maxPerRun": 2 }
+  }
+}
