@@ -1,0 +1,32 @@
+# sb-plant-breakdown Worker — Cloudflare configuration
+#
+# This file is public (the repository is public). It holds NO secrets and no
+# account-specific values. For a real deployment, copy it to
+# wrangler.local.toml (git-ignored), put your D1 database id there, and deploy
+# with worker/setup-cloudflare.ps1, which uses wrangler.local.toml when present.
+#
+# Secrets live only in Cloudflare (set by setup-cloudflare.ps1):
+#   INGEST_SECRET      >= 32 chars; held by the Windows collector
+#   DASHBOARD_SECRET   >= 32 chars, different; for uploads and shared settings
+#   VIEWER_SECRET      optional, read-only; built into the encrypted dashboard
+#                      (set by update-worker.ps1)
+#
+# This file does not record whether, or where, the Worker is deployed.
+
+name = "sb-plant-breakdown"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "sb-plant-breakdown"
+# From `wrangler d1 create sb-plant-breakdown`. Not a credential, but
+# account-specific: keep the real value in wrangler.local.toml.
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[vars]
+# Exact origins allowed to call the Worker from a browser. No wildcards.
+# Add a Netlify branch-deploy origin here (in wrangler.local.toml) only while
+# reviewing a branch, and remove it afterwards.
+ALLOWED_ORIGINS = "https://sb-plant-breakdown.netlify.app"

@@ -1,0 +1,15 @@
+{
+  "name": "sb-plant-breakdown-collector",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Exports the saved Shopify report 'Total sales by product + ID (sb-plant-breakdown)' and uploads it to the sb-plant-breakdown Worker.",
+  "scripts": {
+    "login": "node src/login.mjs --config config.local.json",
+    "collect": "node src/collect.mjs --config config.local.json",
+    "dry-run": "node src/collect.mjs --config config.local.json --dry-run"
+  },
+  "dependencies": {
+    "playwright": "1.56.0"
+  }
+}

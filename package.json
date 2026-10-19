@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "description": "Succulents Box sales breakdown analyzer.",
-  "scripts": { "build": "bash build.sh" },
+  "scripts": {
+    "build": "bash build.sh",
+    "test": "node --test \"tests/*.test.mjs\""
+  },
   "devDependencies": {
     "staticrypt": "^3.5.4",
     "lz-string": "^1.5.0"
