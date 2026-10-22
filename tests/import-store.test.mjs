@@ -55,12 +55,14 @@ test('the stored product keeps the legacy fields the other tabs read', () => {
   assert.equal(p.genus, 'Chlorophytum');
 });
 
-test('a non-plant keeps the legacy "(no genus)" marker the cross-channel views expect', () => {
+test('legacy "genus" field: shared plant-bearing groups keep their canonical name, other non-plants "(no genus)"', () => {
   const sub = products.find(x => x.group === 'Subscriptions');
-  assert.equal(sub.genus, '(no genus)');
-  assert.equal(sub.genusName, '');
+  assert.equal(sub.genus, 'Subscriptions', 'Subscriptions line up across sources in the cross-source tabs');
   assert.equal(sub.isPlant, false);
   assert.equal(sub.group, 'Subscriptions');
+  const pot = products.find(x => x.group === 'Pots & Planters');
+  assert.equal(pot.genus, '(no genus)');
+  assert.equal(pot.genusName, '');
 });
 
 test('the stored product also carries the new vendor, type and prior fields', () => {

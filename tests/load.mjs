@@ -21,7 +21,7 @@ export function loadBrowserGlobals() {
   }
   // Top-level `const`/`function` in a vm script are lexical: pull the ones the
   // app relies on into the shared object the modules will see.
-  const names = ['detectGenus', 'detectNonPlantType', 'getType', 'getItemType', 'isRestricted', 'GENUS_TYPE'];
+  const names = ['detectGenus', 'detectAllGenera', 'detectNonPlantType', 'getType', 'getItemType', 'isRestricted', 'GENUS_TYPE'];
   const picked = vm.runInContext('({' + names.map(n => `${n}: typeof ${n} !== "undefined" ? ${n} : undefined`).join(',') + '})', ctx);
   Object.assign(sandbox, picked);
   return sandbox;

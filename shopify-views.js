@@ -105,8 +105,12 @@
       r.group = c.group;
       r.groupType = c.groupType;
       r.isPlant = !!c.isPlant;
+      r.category = c.category;
       r.genusName = c.genus || "";
-      r.genus = c.genus || "(no genus)";       // legacy field the other tabs read
+      r.ptypeLabel = c.ptypeCanonical || r.ptype;
+      r.isPack = !!c.pack;
+      r.subscriptionAddOn = !!c.subscriptionAddOn;
+      r.genus = PG.legacyGenusOf(c);           // legacy field the other tabs read
       r.classificationBasis = c.basis;
       r.overridden = !!c.overridden;
       r.naturalGroup = c.natural ? c.natural.group : c.group;
@@ -417,7 +421,7 @@
     // filter options come from the un-narrowed set so the operator can always
     // widen again
     fillSelect(document.getElementById("sb-vendor"), uniqueSorted(all, "vendor"), SBS.scope.vendor, "All vendors");
-    fillSelect(document.getElementById("sb-ptype"), uniqueSorted(all, "ptype"), SBS.scope.ptype, "All product types");
+    fillSelect(document.getElementById("sb-ptype"), uniqueSorted(all, "ptypeLabel"), SBS.scope.ptype, "All product types");
     fillSelect(document.getElementById("sb-group"), uniqueSorted(all, "group"), SBS.scope.group, "All groups");
     var msel = document.getElementById("sb-measure"); if (msel) msel.value = SBS.scope.measure;
     var psel = document.getElementById("sb-plantscope"); if (psel) psel.value = SBS.scope.plantScope;
@@ -683,7 +687,7 @@
       csv: function (r) { return r.ptypeBlank ? "" : r.ptype; } },
     { k: "group", label: "Analytics group", sortVal: function (r) { return r.group; },
       csv: function (r) { return r.group; },
-      cell: function (r) { return "<td>" + esc(r.group) + " " + BUI.groupTypeBadge(r.groupType) + "</td>"; } },
+      cell: function (r) { return "<td>" + esc(r.group) + " " + BUI.groupTypeBadge(r.groupType) + BUI.attrBadges(r) + "</td>"; } },
     { k: "groupType", label: "Group type", sortVal: function (r) { return r.groupType; },
       cell: function (r) { return '<td class="small">' + esc(r.groupType) + "</td>"; } },
     { k: "units", label: "Net items sold", cls: "num", sortVal: function (r) { return r.cur.units; },
@@ -825,7 +829,7 @@
 
     var part = partition(snap);
     var all = part.included, excluded = part.excluded;
-    fillSelect(document.getElementById("vn-ptype"), uniqueSorted(all, "ptype"), SBS.scope.ptype, "All product types");
+    fillSelect(document.getElementById("vn-ptype"), uniqueSorted(all, "ptypeLabel"), SBS.scope.ptype, "All product types");
     document.getElementById("vn-measure").value = SBS.scope.measure;
     document.getElementById("vn-plantscope").value = SBS.scope.plantScope;
     syncChannelSelect("vn", snap);

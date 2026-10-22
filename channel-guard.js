@@ -33,9 +33,30 @@
     }
     return cache[k];
   }
+  // The cross-source tabs aggregate on p.genus. Every source's products are
+  // re-grouped here with the ONE shared classifier (and the saved overrides),
+  // so Shopify, Amazon and market rows land in the same canonical groups
+  // (a Shopify "Gift" and a market gift box are both "Gifts"; a Shopify
+  // variety pack and a market bulk pack are both "Mixed variety pack").
+  // Figures are never touched; only the grouping field of the view changes.
+  var gcache = Object.create(null);
+  function overrideSig() {
+    try { return localStorage.getItem((window.SBOverrides && window.SBOverrides.STORAGE_KEY) || "") || ""; } catch (e) { return ""; }
+  }
+  function canonicalView(snap) {
+    if (!snap || !Array.isArray(snap.products) || typeof window.legacyGenus !== "function" || typeof window.sbGenusRec !== "function") return snap;
+    var k = snap.id + "|" + snap.products.length + "|" + (snap.uploadedAt || "") + "|" + (snap._ownStoreView ? 1 : 0) + "|" + overrideSig();
+    if (!gcache[k]) {
+      gcache[k] = Object.assign({}, snap, { products: snap.products.map(function (p) {
+        return Object.assign({}, p, { genus: window.legacyGenus(window.sbGenusRec(p, snap.source)) });
+      }) });
+    }
+    return gcache[k];
+  }
   function viewList(list) {
     return list.map(function (s) {
-      return s && s.source === "shopify" && !s.isCatalog && SR.shopifyChannelStatus(s).anyChannel ? ownStoreView(s) : s;
+      var v = s && s.source === "shopify" && !s.isCatalog && SR.shopifyChannelStatus(s).anyChannel ? ownStoreView(s) : s;
+      return canonicalView(v);
     });
   }
 
@@ -67,7 +88,7 @@
   }
   ["downloadCross", "renderCross", "computeOpportunityMap", "computeOwnedVsMarket", "buildOwnedTitleIndex",
    "computeOvmPlantRows", "computeCrossPlantRows", "renderOppMap", "renderOwnedVsMarket",
-   "renderOvmPlantPanel", "renderCrossPlantPanel"].forEach(guard);
+   "renderOvmPlantPanel", "renderCrossPlantPanel", "renderExternal"].forEach(guard);
 
   // ---- notes on the cross-channel tabs ---------------------------------
   var TAB_STATE = { cross: function () { return state.cross && state.cross.shopifyId; },

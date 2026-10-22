@@ -143,10 +143,16 @@
     AUTO.status = "loading"; AUTO.error = null; renderStatus();
     try {
       var reports = (await api("/v1/reports")).body.reports || [];
+      // Confirmed classification corrections, read-only, for every viewer.
+      try {
+        var so = (await api("/v1/settings/classification_overrides")).body.setting;
+        if (so && window.SBOverrides && window.SBOverrides.setShared) window.SBOverrides.setShared(so.value, so.version);
+      } catch (se) { console.warn("shared classification overrides:", se); }
       var runs = (await api("/v1/imports?limit=100")).body.imports || [];
       var pick = window.sharedPickCurrent(reports);
       AUTO.reports = reports;
       AUTO.collection = window.sharedCollectionStatus(runs, { source: "shopify" });
+      AUTO.marketCollection = window.sharedCollectionStatus(runs, { source: "market" });
       AUTO.checkedAt = new Date().toISOString();
       if (!pick.current) { AUTO.status = "none"; AUTO.current = null; afterAuto(); return; }
       var cur = await ensureAutoLoaded(pick.current);
@@ -392,7 +398,8 @@
         '<div class="small" style="margin-bottom:6px">Hand-set classifications and confirmed Amazon column mappings, so every browser groups ' +
         "and reads files the same way. Pushing needs the dashboard key and refuses to overwrite a newer shared copy; pull first if it does.</div>" +
         '<table><tbody>' +
-        settingRow("classification_overrides", "Classification overrides", Object.keys(window.SBOverrides.load()).length, vers) +
+        settingRow("classification_overrides", "Classification overrides", Object.keys(window.SBOverrides.loadLocal()).length, vers,
+          Object.keys(window.SBOverrides.loadShared()).length) +
         settingRow("amazon_column_mappings", "Amazon column mappings", Object.keys(window.SBAmazonMappings.load()).length, vers) +
         "</tbody></table></div>");
     }
@@ -441,6 +448,15 @@
         ", latest " + esc(window.periodRangeText(latestMk.period_start, latestMk.period_end)) +
         " · Product Sales report, other stores only (Succulents Box stores left out)</div>"
       : '<div><b>Market (ShipStation)</b></div><div class="small" style="color:var(--muted)">No market data yet; it is collected with Shopify once the collector is set up for ShipStation</div>';
+    // The latest market collection failed after the last success (for example
+    // the collector's ShipStation sign-in ran out): say so plainly.
+    var mf = AUTO.marketCollection && AUTO.marketCollection.failure;
+    if (mf) {
+      var signIn = /sign[\s-]?in|login|captcha/i.test((mf.error_code || "") + " " + (mf.error_message || ""));
+      market += '<div class="small" style="color:#8a5a00">' + (signIn
+        ? "ShipStation sign-in needed on the collector PC (<code>npm run login:shipstation</code>). The last market data stays in place."
+        : "Latest market collection failed: " + esc(mf.error_message || mf.error_code || "unknown error") + ". The last market data stays in place.") + "</div>";
+    }
     return '<div class="panel" id="ds-sources"><div class="panel-h"><h2>Data sources</h2></div>' +
       '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border)">' +
         '<div>' + shop + "</div>" + (c ? '<button class="tab" id="ds-src-refresh">Refresh</button>' : "") + "</div>" +
@@ -547,11 +563,13 @@
     } catch (e) { alert("Could not open the report: " + e.message); }
   }
 
-  function settingRow(key, label, localCount, vers) {
-    return "<tr><td><b>" + label + "</b></td><td class=\"small\">" + localCount + " in this browser · " +
+  function settingRow(key, label, localCount, vers, sharedCount) {
+    return "<tr><td><b>" + label + "</b></td><td class=\"small\">" +
+      (sharedCount != null ? sharedCount + " confirmed (shared, applied automatically) · " + localCount + " unconfirmed in this browser · " : localCount + " in this browser · ") +
       (vers[key] ? "shared version " + vers[key] : "not synced yet") + "</td>" +
       '<td><button class="tab" data-di-push="' + key + '">Push to shared</button> ' +
-      '<button class="tab" data-di-pull="' + key + '">Pull from shared</button></td>' +
+      '<button class="tab" data-di-pull="' + key + '">Pull from shared</button>' +
+      (key === "classification_overrides" ? ' <button class="tab" data-di-export-ov="1">Download for review</button>' : "") + "</td>" +
       '<td class="small" id="di-set-' + key + '">' + esc(DI.results["set:" + key] || "") + "</td></tr>";
   }
 
@@ -603,7 +621,11 @@
   }
 
   async function pushSetting(key) {
-    var value = key === "classification_overrides" ? window.SBOverrides.load() : window.SBAmazonMappings.load();
+    // Classification: the shared corrections plus this browser's changes, so
+    // a push never drops a correction someone else confirmed.
+    var value = key === "classification_overrides"
+      ? Object.assign({}, window.SBOverrides.loadShared(), window.SBOverrides.loadLocal())
+      : window.SBAmazonMappings.load();
     var vers = loadVers();
     try {
       var r = await api("/v1/settings/" + key, { method: "PUT", body: { value: value, baseVersion: vers[key] || 0, updatedBy: "dashboard" } });
@@ -611,6 +633,7 @@
         DI.results["set:" + key] = "Shared copy is newer (version " + r.body.currentVersion + "). Pull first, then push.";
       } else if (r.body.ok) {
         vers[key] = r.body.version; saveVers(vers);
+        if (key === "classification_overrides") { window.SBOverrides.setShared(value, r.body.version); window.SBOverrides.save({}); }
         DI.results["set:" + key] = "pushed — shared version " + r.body.version;
       } else DI.results["set:" + key] = "failed";
     } catch (e) { DI.results["set:" + key] = e.message; }
@@ -622,7 +645,7 @@
       var s = r.body.setting;
       if (!s) { DI.results["set:" + key] = "nothing shared yet"; render(); return; }
       if (!confirm("Replace this browser’s " + key.replace(/_/g, " ") + " with the shared copy (version " + s.version + ")?")) return;
-      if (key === "classification_overrides") window.SBOverrides.save(s.value);
+      if (key === "classification_overrides") { window.SBOverrides.setShared(s.value, s.version); window.SBOverrides.save({}); }
       else localStorage.setItem(window.SBAmazonMappings.STORAGE_KEY, JSON.stringify(s.value));
       var vers = loadVers(); vers[key] = s.version; saveVers(vers);
       DI.results["set:" + key] = "pulled — version " + s.version;
@@ -661,6 +684,12 @@
     document.querySelectorAll("[data-di-load]").forEach(function (b) { b.onclick = function () { loadShared(b.getAttribute("data-di-load")); }; });
     document.querySelectorAll("[data-di-push]").forEach(function (b) { b.onclick = function () { pushSetting(b.getAttribute("data-di-push")); }; });
     document.querySelectorAll("[data-di-pull]").forEach(function (b) { b.onclick = function () { pullSetting(b.getAttribute("data-di-pull")); }; });
+    document.querySelectorAll("[data-di-export-ov]").forEach(function (b) { b.onclick = function () {
+      var blob = new Blob([JSON.stringify(window.SBOverrides.exportForReview(), null, 2)], { type: "application/json" });
+      var u = URL.createObjectURL(blob), el = document.createElement("a");
+      el.href = u; el.download = "classification-overrides-for-review.json"; document.body.appendChild(el); el.click();
+      setTimeout(function () { URL.revokeObjectURL(u); el.remove(); }, 0);
+    }; });
     document.querySelectorAll("[data-hist-dl]").forEach(function (b) { b.onclick = function () { downloadRevision(b.getAttribute("data-hist-dl")); }; });
     document.querySelectorAll("[data-hist-open]").forEach(function (b) { b.onclick = function () { openRevision(b.getAttribute("data-hist-open")); }; });
     if (g("ds-src-refresh")) g("ds-src-refresh").onclick = function () { refresh(); autoLoad(); };

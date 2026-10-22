@@ -415,6 +415,7 @@
         r2.group = cl.group || UNCLASSIFIED_TYPE;
         r2.isPlant = !!cl.isPlant;
         r2.genus = cl.genus || "";
+        r2.category = cl.category || "";
         r2.classificationBasis = cl.basis;
         // An override changes the analytics group only. `ptype` above is the
         // product type exactly as the export stated it and is never rewritten.
@@ -518,6 +519,13 @@
   // Owned-vs-Market and Opportunity Map views already read (title / units /
   // rev / net / genus) alongside the new vendor, type, group and prior fields,
   // so those views keep working untouched.
+  // Same rule as product-grouping.js legacyGenusOf: plant genera and the
+  // shared plant-bearing categories; everything else "(no genus)".
+  function legacyGenusField(r) {
+    if (r.groupType === "Genus" && r.group && r.group !== "Unidentified plant") return r.group;
+    if (r.group === "Mixed variety pack" || r.group === "Gifts" || r.group === "Subscriptions") return r.group;
+    return "(no genus)";
+  }
   function toSnapshotProduct(r) {
     return {
       asin: "", sku: "",
@@ -530,8 +538,9 @@
       net: r.cur.net, tax: r.cur.tax, rev: r.cur.total,
       avg: r.cur.units ? round2(r.cur.net / r.cur.units) : 0,
       glance: 0, conv: 0, inv: 0,
-      genus: r.genus || "(no genus)",          // legacy semantics, for the other tabs
+      genus: legacyGenusField(r),              // legacy semantics, for the other tabs
       genusName: r.genus || "",
+      category: r.category || "",
       group: r.group, groupType: r.groupType, isPlant: !!r.isPlant,
       classificationBasis: r.classificationBasis || "",
       overridden: !!r.overridden, overrideNote: r.overrideNote || "",
@@ -633,6 +642,7 @@
       rec.groupType = c.groupType || "Product category";
       rec.isPlant = !!c.isPlant;
       rec.genus = c.genus || "";
+      rec.category = c.category || "";
       rec.classificationBasis = c.basis || "";
       rec.overridden = !!c.overridden;
       rec.naturalGroup = c.natural ? c.natural.group : rec.group;

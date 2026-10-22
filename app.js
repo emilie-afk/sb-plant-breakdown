@@ -7,13 +7,25 @@ let snapshots = loadSnapshots();
 // Re-run the genus classifier over stored snapshots so new categories
 // (e.g. Bundle, Subscription) propagate without requiring re-upload.
 // Runs once per session — cheap even with tens of thousands of line items.
+// The "genus" these tabs aggregate on comes from the shared classifier
+// (product-grouping.js legacyGenus): plant genera, plus the canonical
+// Mixed variety pack / Gifts / Subscriptions groups, the same for every source.
+function sbGenus(rec) {
+  if (typeof legacyGenus === "function") return legacyGenus(rec);
+  return (typeof detectGenus === "function" ? detectGenus(rec.title) : "") || "(no genus)";
+}
+function sbGenusRec(p, source) {
+  return { title: p.title, ptype: p.ptype || "", vendor: p.vendor || p.rawStore || "",
+           channel: source === "external" ? "market" : source, asin: p.asin || "",
+           productId: p.productId || null, sku: p.sku || "" };
+}
 (function reclassifyGenusOnLoad() {
   if (typeof detectGenus !== "function") return;
   let touched = 0;
   for (const snap of snapshots) {
     if (!snap || !Array.isArray(snap.products)) continue;
     for (const p of snap.products) {
-      const newGenus = detectGenus(p.title) || "(no genus)";
+      const newGenus = sbGenus(sbGenusRec(p, snap.source));
       if (newGenus !== p.genus) { p.genus = newGenus; touched++; }
     }
   }
@@ -218,7 +230,7 @@ function parseAmazon(rows, ws){
       const rev = num(r[18]);              // Ordered Product Sales
       const avg = units > 0 ? rev / units : 0;
       products.push({asin, title, glance, conv, units, avg, rev, inv: 0,
-                     genus: detectGenus(title) || "(no genus)"});
+                     genus: sbGenus({title, asin, channel: "amazon"})});
     }
     return products;
   }
@@ -242,7 +254,7 @@ function parseAmazon(rows, ws){
     if (conv > 1) conv = conv / 100;
     const units = num(r[4]), avg = num(r[5]), rev = num(r[6]), inv = num(r[7]);
     products.push({asin, title, glance, conv, units, avg, rev, inv,
-                   genus: detectGenus(title) || "(no genus)"});
+                   genus: sbGenus({title, asin, channel: "amazon"})});
   }
   return products;
 }
@@ -262,7 +274,7 @@ function parseShopify(rows){
     if (!title || title === "Total" || title === "Product title") continue;
     const units = num(r[3]), gross = num(r[4]), disc = num(r[5]);
     const ret = num(r[6]), net = num(r[7]), rev = num(r[9]);
-    products.push({asin: "", title, units, gross, disc, ret, net, rev, avg: units ? rev/units : 0, glance: 0, conv: 0, inv: 0, genus: detectGenus(title) || "(no genus)"});
+    products.push({asin: "", title, units, gross, disc, ret, net, rev, avg: units ? rev/units : 0, glance: 0, conv: 0, inv: 0, genus: sbGenus({title, channel: "shopify"})});
   }
   return products;
 }
@@ -319,7 +331,7 @@ function parseShopifyCatalog(rows){
       units: 0, rev: 0, avg: 0, glance: 0, conv: 0,
       inv: inv,
       catalogOnly: true,
-      genus: detectGenus(title) || "(no genus)"
+      genus: sbGenus({title, sku, channel: "catalog"})
     });
   }
   return products;
@@ -2106,7 +2118,7 @@ function parseShipStation(rows, filename) {
     const tot = totalPerOrder[line.orderId] || 0;
     const estRev = tu > 0 ? tot * (line.qty / tu) : 0;
     return {...line, units: line.qty, estRev,
-            genus: detectGenus(line.title) || '(no genus)'};
+            genus: sbGenus({title: line.title, vendor: line.rawStore || line.store || "", sku: line.sku || "", channel: "market"})};
   });
 }
 
@@ -4212,7 +4224,7 @@ async function sbCatalogFetch(forceRefresh) {
             inv: 0,  // /products.json doesn't expose inventory qty on storefront
             available: available && vv.available,
             catalogOnly: true,
-            genus: (typeof detectGenus === "function" ? detectGenus(title) : "") || "(no genus)"
+            genus: sbGenus({title, channel: "catalog"})
           });
         }
       }
