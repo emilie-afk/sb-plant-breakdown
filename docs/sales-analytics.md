@@ -60,16 +60,46 @@ A dollar (or unit) change is shown beside every percentage, in every card, table
 
 ## Classification
 
-Every record lands in exactly one primary group, so group totals reconcile to the included source total:
+Shopify, Amazon and ShipStation market rows go through **one** classifier (`product-grouping.js`) with the same canonical names. Every record carries two separate fields:
+
+- **category**: `Plants` for a single live plant, otherwise a product category: `Gifts`, `Subscriptions`, `Mixed variety pack`, `Gift Cards`, `Heat Packs`, `Fertilizer`, `Soil`, `Pots & Planters`, `Tools`, `Accessories`, `Kits`, `Stationery & Cards`, `Merchandise`, `Decor`, `Shipping Protection`, ... or `Unclassified`.
+- **genus**: the botanical genus when identifiable, else empty. A gift box or subscription keeps a genus when it names exactly one; a mixed pack never has one. `Bundle` and `Subscription` are never genera.
+
+The **primary group** (one per product; every breakdown, total and chart uses it) is the genus for plants (`Unidentified plant` when unknown) and the category otherwise, so group totals reconcile to the included source total.
+
+Order of evidence:
 
 1. An explicit **override** wins.
-2. A non-plant **imported product type** is decisive. A gift containing a succulent is a Gift, counted once.
-3. A plant product type uses genus detection. Where that fails, the record is `Unidentified plant` (group type *Genus*), which is a different group from `Unclassified` (*Product category*).
-4. With no usable product type (every Amazon row, and any blank Shopify type), the title decides, in this order: genus, then category rules, then "pack of something", then "a plant we cannot name", then Unclassified.
+2. The **title** settles what the product is when it says so plainly, even against a stored type: a heat pack (`Heat Pack` typed Fertilizers), a gift card (typed Greeting Card), an explicit subscription (`.../Month Auto renew` typed Pots & Planters), plant food (typed Air Plants or Gardening Tools), a printable. Such rows keep their imported type and get an *info* note (`type_overruled_by_title`).
+3. Otherwise a non-plant **imported product type** decides. A gift containing a succulent is a Gift (with that genus), counted once.
+4. A plant type, or no usable type (Amazon, ShipStation), uses the title: a gift box / arrangement / subscription / kit / soil / tools word, then a genus (a pack naming several genera is a `Mixed variety pack`; a single-genus pack stays under its genus), then pots / accessories / decor words, then a pack of plants, then a plant word (`Unidentified plant`), then `Unclassified`.
+
+What the title rules ignore: marketing phrases ("great gift for mom", "gift ideas", "party favors", anything after "for"), quoted cultivar names (`'Party Favor'`, `'Irish Bouquet'`) when looking for category words, the store brand, negations ("no soil needed"), bonus care guides, and pot-size descriptors when the title is a plant or a plant bundle (`(2" Pots)`, `4" Grower Pot`, `+ Clay Pot`, `in a 7" planter`). A pot *for* succulents is still a pot. Mystery single plants are plants; mystery packs are mixed packs. `Dropship` and `(none)` types carry no evidence.
+
+Decided naming and attributes:
+
+- Several plants of one genus stay under that genus; `pack` is recorded as a separate attribute (badge), not a group.
+- Snake plants are shown as **Sansevieria** (Snake Plant, *Dracaena trifasciata/angolensis/…*); other *Dracaena* stay Dracaena.
+- Verified *Epipremnum* is shown as **Pothos**; *Scindapsus* sold as "satin pothos" stays Scindapsus.
+- A subscription add-on is grouped by the item (heat pack → Heat Packs, a plant → its genus, an accessory → Accessories); `subscription add-on` is recorded as an attribute.
+- Succulents or plants *in a planter* are Gifts (arrangements), keeping a genus when one is named; a cultivar name such as 'Heart' does not make a plant a gift.
+- Products nobody has identified (e.g. a custom tray, a walk-in order) stay **Unclassified** until a correction is confirmed.
+- The product-type label "Indoor Plants" is displayed as **Houseplants** (raw value kept).
+
+**Product types** are shown in filters under one canonical label (`Air Plant`, `Air Plants`, `Air PLants`, `AirPlant` → `Air Plants`); the raw imported value is kept on the record and in exports.
+
+**Overrides** are keyed on stable identifiers: `shopify␟pid:<Product ID>`, `amazon␟<ASIN>`, `market␟<store>␟sku:<SKU>`; records without an id fall back to channel + title + vendor + type. Overrides saved under the old title key are still honoured, and re-saving moves them to the id key. They are applied at render time, so they cover every refresh and every historical report. Two layers:
+
+- **Confirmed (central)**: the Worker setting `classification_overrides`, read with the read-only viewer key on every load and applied for every viewer.
+- **Unconfirmed (this browser)**: changes made in the review panel. They win in that browser only, and "Download for review" (Data settings → Advanced) exports them with titles.
+
+Confirmed corrections are written only through an authenticated path: the reviewed import `node tools/classification-overrides.mjs check|push --url <worker> --file reviewed.json [--apply]` (validates keys, groups and fields, shows the exact additions/changes/removals, writes only with `--apply`, refuses if the shared copy changed meanwhile; the dashboard key comes from Windows Credential Manager `sb-pb-dashboard`), or Push under Advanced when the dashboard key is entered there. The viewer key stays read-only.
+
+**Cross-source tabs** (Cross-channel, Opportunity Map, Owned vs Market, External Stores) aggregate on a `genus` field derived from the same classification: the plant genus, or `Mixed variety pack` / `Gifts` / `Subscriptions` (shared by every source), and `(no genus)` for other non-plants, so equivalent categories line up and distinct product types are not merged. The figures are never changed.
 
 Product tables and exports show the **imported product type** (never rewritten) and the **analytics group** (which an override may change) side by side.
 
-The "classifications to review" panel lists rows where the imported type disagrees with the title. A composite type (gift, kit, subscription) over a component title is not flagged.
+The "classifications to review" panel lists rows where the imported type disagrees with the title and the title did not settle it. A composite type (gift, kit, subscription) over a component title is not flagged.
 
 ## Sales channels and marketplace orders
 

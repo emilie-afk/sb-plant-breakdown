@@ -52,7 +52,7 @@
     var by = Object.create(null), order = [];
     for (var i = 0; i < used.length; i++) {
       var rows = await window.SBShared.fetchRows(used[i]);
-      var part = window.marketExternalSnapshotFromShared(used[i], rows, { detectGenus: window.detectGenus });
+      var part = window.marketExternalSnapshotFromShared(used[i], rows, { legacyGenus: window.legacyGenus, detectGenus: window.detectGenus });
       part.products.forEach(function (x) {
         var k = x.rawStore + "␟" + (x.sku || x.title);
         if (!by[k]) { by[k] = Object.assign({}, x, { units: 0, qty: 0, estRev: 0 }); order.push(k); }

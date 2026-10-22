@@ -92,6 +92,11 @@
     var cls = ch.abs > 0 ? "up" : ch.abs < 0 ? "down" : "flat";
     return '<span class="' + cls + '">' + signedVal(ch.abs, measure) + " (" + pct1(ch.pct) + ")</span> vs prior period";
   }
+  // Attributes recorded beside the group (they never change it).
+  function attrBadges(r) {
+    return (r && r.isPack ? ' <span class="badge type-other" title="Several plants sold together; grouped by genus when they share one">pack</span>' : "") +
+           (r && r.subscriptionAddOn ? ' <span class="badge type-other" title="Bought as a subscription add-on; grouped by the item itself">subscription add-on</span>' : "");
+  }
   function groupTypeBadge(t) {
     return '<span class="badge ' + (t === "Genus" ? "gt-genus" : "gt-category") + '">' + esc(t) + "</span>";
   }
@@ -253,6 +258,7 @@
     pct1: pct1, pctPlain: pctPlain, val: val, signedVal: signedVal, isMoney: isMoney, esc: esc,
     changeOf: changeOf, pctCell: pctCell, deltaCell: deltaCell, changeSub: changeSub,
     groupTypeBadge: groupTypeBadge,
+    attrBadges: attrBadges,
     headHtml: headHtml, rowsHtml: rowsHtml, sortRows: sortRows, toggleSort: toggleSort,
     paginationBar: paginationBar, wirePagination: wirePagination, renderTable: renderTable,
     download: download, csvFromCols: csvFromCols, stripTags: stripTags, cards: cards

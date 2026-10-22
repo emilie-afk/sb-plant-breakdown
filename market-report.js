@@ -142,7 +142,11 @@
     var products = rows.filter(function (r) { return r.productType !== "(adjustment)"; }).map(function (r) {
       return { orderId: "", orderDate: "", rawStore: r.vendor, store: storeGroup(r.vendor), sku: r.sku || "", title: r.title,
                qty: r.cur.units, units: r.cur.units, estRev: r.cur.net, revenueIsActual: true,
-               genus: (helpers.detectGenus && helpers.detectGenus(r.title)) || "(no genus)" };
+               ptype: r.productType || "",
+               // the same classifier and overrides as Shopify and Amazon
+               genus: helpers.legacyGenus
+                 ? helpers.legacyGenus({ title: r.title, ptype: r.productType || "", vendor: r.vendor, sku: r.sku || "", channel: "market" })
+                 : ((helpers.detectGenus && helpers.detectGenus(r.title)) || "(no genus)") };
     });
     return {
       id: "external_market_" + report.period_start + "_" + report.period_end,

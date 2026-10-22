@@ -385,7 +385,7 @@
       sortVal: function (r) { return r.ptype; },
       cell: function (r) { return '<td class="small">' + BUI.esc(r.ptype) + "</td>"; } },
     { k: "group", label: "Analytics group", sortVal: function (r) { return r.group; },
-      cell: function (r) { return "<td>" + BUI.esc(r.group) + " " + BUI.groupTypeBadge(r.groupType) + "</td>"; },
+      cell: function (r) { return "<td>" + BUI.esc(r.group) + " " + BUI.groupTypeBadge(r.groupType) + BUI.attrBadges(r) + "</td>"; },
       csv: function (r) { return r.group; } },
     { k: "groupType", label: "Group type", sortVal: function (r) { return r.groupType; },
       cell: function (r) { return '<td class="small">' + BUI.esc(r.groupType) + "</td>"; } },
@@ -530,7 +530,7 @@
       document.getElementById("amazon-alerts-count").textContent = "unavailable";
     } else window.renderAlerts("amazon", ctx.scoped.map(function (r) {
       return { title: r.title, asin: r.asin, glance: r.cur.glance, units: r.cur.units,
-               conv: PG.conversionOf(r.cur), rev: r.cur.net, inv: r.cur.inv, genus: r.group };
+               conv: PG.conversionOf(r.cur), rev: r.cur.net, inv: r.cur.inv, genus: PG.legacyGenusOf(r) };
     }));
   }
 

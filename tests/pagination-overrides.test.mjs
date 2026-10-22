@@ -117,25 +117,27 @@ test('exports are never paginated', () => {
 // ────────────────────────────────────────────────────────────
 // Suspicious classifications
 // ────────────────────────────────────────────────────────────
-test('the two named examples are flagged', () => {
+test('the two named examples follow the title, keep the imported type, and say so', () => {
   const heat = included.find(r => r.title === A.flagSub.title);
   assert.equal(heat.ptype, 'Fertilizers', 'imported type is preserved verbatim');
-  assert.equal(heat.group, 'Fertilizer', 'the product type still decides the grouping');
-  assert.ok(heat.suspicion, 'but it is flagged');
-  assert.equal(heat.suspicion.kind, 'type_vs_title');
-  assert.equal(heat.suspicion.suggested, 'Subscriptions');
+  assert.equal(heat.group, 'Heat Packs', 'a warming pack is a heat pack, not fertilizer or a subscription');
+  assert.equal(heat.classificationBasis, 'title_overrides_type');
+  assert.ok(heat.suspicion, 'the disagreement is recorded');
+  assert.equal(heat.suspicion.kind, 'type_overruled_by_title');
   assert.match(heat.suspicion.message, /Fertilizers/);
 
   const card = included.find(r => r.title === A.flagCard.title);
   assert.equal(card.ptype, 'Greeting Card');
-  assert.equal(card.group, 'Stationery & Cards');
-  assert.equal(card.suspicion.kind, 'type_vs_title');
-  assert.equal(card.suspicion.suggested, 'Gift Cards');
+  assert.equal(card.group, 'Gift Cards');
+  assert.equal(card.suspicion.kind, 'type_overruled_by_title');
 });
 
 test('flagging stays a short, actionable list rather than noise', () => {
   const flagged = PG.flaggedRecords(included, 'review');
-  assert.ok(flagged.length > 0 && flagged.length < 40, `${flagged.length} flagged`);
+  // The two mislabels in the sample now follow their titles (recorded as
+  // info notes), so the review list may be empty; it must never be noise.
+  assert.ok(flagged.length < 40, `${flagged.length} flagged`);
+  assert.ok(included.some(r => r.suspicion && r.suspicion.kind === 'type_overruled_by_title'));
   assert.ok(flagged.every(r => r.suspicion.severity === 'review'));
 });
 
@@ -182,7 +184,7 @@ test('an override changes the group and nothing else', () => {
   assert.deepEqual(after.cur, before.cur);
   assert.deepEqual(after.prior, before.prior);
   // ...and the classification it would have had is kept for audit and undo.
-  assert.equal(after.naturalGroup, 'Fertilizer');
+  assert.equal(after.naturalGroup, 'Heat Packs');
 });
 
 test('an override moves the money between groups and totals still reconcile', () => {
@@ -220,9 +222,9 @@ test('removing an override restores the natural classification exactly', () => {
   map = PG.setOverride(map, heat, null);
   assert.equal(Object.keys(map).length, 0);
   const after = PG.splitExclusions(parseWith(map).records).included.find(r => r.title === A.flagSub.title);
-  assert.equal(after.group, 'Fertilizer');
+  assert.equal(after.group, 'Heat Packs');
   assert.equal(after.overridden, false);
-  assert.ok(after.suspicion, 'and it is flagged again');
+  assert.ok(after.suspicion, 'and the type/title note is back');
 });
 
 test('override keys are per-channel and survive a re-import', () => {

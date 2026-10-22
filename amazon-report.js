@@ -93,6 +93,9 @@
       if (c) {
         r.group = c.group; r.groupType = c.groupType; r.isPlant = !!c.isPlant;
         r.genus = c.genus || "";
+        r.category = c.category || "";
+        r.ptypeLabel = c.ptypeCanonical || r.ptype || "";
+        r.isPack = !!c.pack; r.subscriptionAddOn = !!c.subscriptionAddOn;
         r.classificationBasis = c.basis;
         r.overridden = !!c.overridden;
         r.naturalGroup = c.natural ? c.natural.group : c.group;
