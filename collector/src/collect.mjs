@@ -10,6 +10,8 @@
 //   --no-backfill     skip historical months this run
 //   --only shopify|market   collect one source only (default: both, when
 //                     config.shipstation is set)
+//   --retry-shipstation  try the automated ShipStation window once more even
+//                     though an earlier run found it signed out (see below)
 //
 // MARKET: with config.shipstation, the same periods are also collected from
 // ShipStation's Insights → Product Sales report (units and item revenue by
@@ -112,7 +114,7 @@ export async function main() {
           text = fs.readFileSync(fromFile, 'utf8');
           rec.download = { via: 'file', bytes: Buffer.byteLength(text) };
         } else {
-          browser = browser || await openBrowser(cfg);
+          browser = browser || await openBrowser(cfg).catch(profileBusy);
           if (browser.code) { code = browser.code; rec.status = browser.status; throw Object.assign(new Error(browser.status), { quiet: true }); }
           const out = await (await import('./browser.mjs')).exportReport(browser.page, reportUrl(cfg, period));
           text = out.text; pageTotals = out.pageTotals;
@@ -185,6 +187,18 @@ export async function main() {
         } catch (e) { log('Market backfill skipped: ' + safeError(e)); }
       }
       let ss = null;
+      // An earlier run found the automated ShipStation window signed out: do
+      // not open it again until a person has signed in through the normal
+      // window (npm run login:shipstation) or asks for a retry.
+      const SSmod = await import('./shipstation.mjs');
+      const block = fromFile || flag('retry-shipstation') ? null : SSmod.readSignInBlock(paths.base);
+      if (flag('retry-shipstation')) SSmod.clearSignInBlock(paths.base);
+      if (block) {
+        ss = { code: EXIT.SIGN_IN_NEEDED,
+               status: 'ShipStation sign-in needed since ' + block.since.slice(0, 10) +
+                       ' (automated window not reopened; run npm run login:shipstation)' };
+        log('Market data skipped: ' + ss.status + '.');
+      }
       for (const period of mPeriods) {
         const rid = makeRunId();
         const rec = { runId: rid, kind: 'shipstation_product_sales', period: { start: period.start, end: period.end, kind: period.kind },
@@ -194,7 +208,7 @@ export async function main() {
           let text;
           if (fromFile) { text = fs.readFileSync(fromFile, 'utf8'); rec.download = { via: 'file', bytes: Buffer.byteLength(text) }; }
           else {
-            ss = ss || await openShipStation(cfg, browser);
+            ss = ss || await openShipStation(cfg, browser).catch(profileBusy);
             if (ss.code) { code = ss.code; rec.status = ss.status; throw Object.assign(new Error(ss.status), { quiet: true }); }
             const out = await (await import('./shipstation.mjs')).exportProductSales(ss.page, cfg, period);
             text = out.text; rec.download = { via: 'browser', bytes: Buffer.byteLength(text), shownRange: out.shownRange };
@@ -258,25 +272,41 @@ async function openShipStation(cfg, shopifyBrowser) {
   const SS = await import('./shipstation.mjs');
   const headed = !flag('headless');
   let context = shopifyBrowser && shopifyBrowser.context && !shopifyBrowser.code ? shopifyBrowser.context : null;
-  if (!context) { S.keepSessionsAcrossRestarts(cfg); ({ context } = await B.launch(cfg, { headed })); }
+  if (!context) { S.keepSessionsAcrossRestarts(cfg); ({ context } = await B.launch(cfg, { headed, log })); }
   let page = await context.newPage();
   await page.goto(SS.reportUrl(cfg), { waitUntil: 'domcontentloaded' });
   let s = await SS.settleAuthState(page);
-  if (s === 'authenticated') return { context, page };
-  if (s === 'unknown') return { context, page, code: EXIT.UNKNOWN_PAGE, status: 'unknown_page (ShipStation)' };
+  const base = (await import('./browser.mjs')).localPaths(cfg).base;
+  // Did not work: close the automated window now and remember it, so no later
+  // run opens it again before a person has signed in (readSignInBlock).
+  const failed = async (code, status) => {
+    SS.writeSignInBlock(base, status);
+    if (!(shopifyBrowser && shopifyBrowser.context === context)) await context.close().catch(() => {});
+    else { await page.close().catch(() => {}); }
+    return { code, status };
+  };
+  if (s === 'authenticated') { SS.clearSignInBlock(base); return { context, page }; }
+  if (s === 'unknown') return failed(EXIT.UNKNOWN_PAGE, 'unknown_page (ShipStation)');
   const wait = headed ? (cfg.signInWaitMinutes ?? 30) : 0;
   if (shopifyBrowser && shopifyBrowser.context === context) shopifyBrowser.code = shopifyBrowser.code || null;
   await context.close().catch(() => {});
   if (shopifyBrowser && shopifyBrowser.context === context) shopifyBrowser.context = null;
-  if (!wait) return { code: s === 'captcha' ? EXIT.CAPTCHA : EXIT.SIGN_IN_NEEDED, status: 'ShipStation ' + s };
+  const status0 = 'ShipStation ' + s;
+  if (!wait) { SS.writeSignInBlock(base, status0); return { code: s === 'captcha' ? EXIT.CAPTCHA : EXIT.SIGN_IN_NEEDED, status: status0 }; }
   const closed = await S.signInWithNormalWindow(cfg, wait, log, { url: SS.reportUrl(cfg), label: 'ShipStation' });
-  if (!closed) return { code: EXIT.SIGN_IN_NEEDED, status: 'ShipStation ' + s + ' (nobody signed in within ' + wait + ' min)' };
-  ({ context } = await B.launch(cfg, { headed }));
+  if (!closed) {
+    const st = status0 + ' (nobody signed in within ' + wait + ' min)';
+    SS.writeSignInBlock(base, st);
+    return { code: EXIT.SIGN_IN_NEEDED, status: st };
+  }
+  // One check that the person's sign-in reached the collector's profile.
+  ({ context } = await B.launch(cfg, { headed, log }));
   page = context.pages()[0] || await context.newPage();
   await page.goto(SS.reportUrl(cfg), { waitUntil: 'domcontentloaded' });
   s = await SS.settleAuthState(page);
-  if (s === 'authenticated') { log('Signed in to ShipStation; continuing.'); return { context, page }; }
-  return { context, page, code: s === 'captcha' ? EXIT.CAPTCHA : EXIT.SIGN_IN_NEEDED, status: 'ShipStation ' + s + ' after the sign-in window' };
+  if (s === 'authenticated') { SS.clearSignInBlock(base); log('Signed in to ShipStation; continuing.'); return { context, page }; }
+  shopifyBrowser = null;
+  return failed(s === 'captcha' ? EXIT.CAPTCHA : EXIT.SIGN_IN_NEEDED, 'ShipStation ' + s + ' after the sign-in window');
 }
 
 async function openBrowser(cfg) {
@@ -284,7 +314,7 @@ async function openBrowser(cfg) {
   const S = await import('./signin.mjs');
   const headed = !flag('headless');
   S.keepSessionsAcrossRestarts(cfg);
-  let { context, page } = await B.launch(cfg, { headed });
+  let { context, page } = await B.launch(cfg, { headed, log });
   await page.goto(cfg.adminUrl, { waitUntil: 'domcontentloaded' });
   let s = await B.settleAuthState(page);
   if (s === 'authenticated') return { context, page };
@@ -297,11 +327,18 @@ async function openBrowser(cfg) {
   if (!wait) return { code: s === 'captcha' ? EXIT.CAPTCHA : EXIT.SIGN_IN_NEEDED, status: s };
   const closed = await S.signInWithNormalWindow(cfg, wait, log);
   if (!closed) return { code: EXIT.SIGN_IN_NEEDED, status: s + ' (nobody signed in within ' + wait + ' min)' };
-  ({ context, page } = await B.launch(cfg, { headed }));
+  ({ context, page } = await B.launch(cfg, { headed, log }));
   await page.goto(cfg.adminUrl, { waitUntil: 'domcontentloaded' });
   s = await B.settleAuthState(page);
   if (s === 'authenticated') { log('Signed in; continuing.'); return { context, page }; }
   return { context, page, code: s === 'captcha' ? EXIT.CAPTCHA : EXIT.SIGN_IN_NEEDED, status: s + ' after the sign-in window' };
+}
+
+// The shared browser profile stayed busy: report it plainly (not a sign-in
+// problem, so the ShipStation sign-in block is not touched).
+function profileBusy(e) {
+  if (e && e.code === 'profile_in_use') return { code: EXIT.PROFILE_BUSY, status: e.message };
+  throw e;
 }
 
 function writeRunRecord(dir, rec) {

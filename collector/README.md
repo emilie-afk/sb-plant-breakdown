@@ -43,6 +43,7 @@ With a `shipstation` section in the config (see `config.example.json`), each run
 - Succulents Box's own stores are dropped; coupon and adjustment rows are kept as excluded totals;
 - the report page must show exactly the requested date range, or the file is refused;
 - sign-in works like Shopify's: if ShipStation asks, a normal window opens on the collector's profile for a person to sign in, then close.
+- **An automated ShipStation window that did not work is not opened again.** If the automated window is not signed in (sign-in page, human check, unexpected page), it is closed and the collector records that in `shipstation-signin.json` (in its own data folder). Later runs skip market data without opening any ShipStation window; the dashboard shows "ShipStation sign-in needed". To resume, sign in through a normal window with `npm run login:shipstation` (closing it lifts the block; the next run tries once), or run `node src/collect.mjs --config config.local.json --retry-shipstation`. ShipStation's sign-in page (Cloudflare) refuses automated browsers, so never sign in inside the window marked "controlled by automated test software".
 
 Test it without uploading: `node src/collect.mjs --config config.local.json --only market --start 2026-09-01 --end 2026-09-30 --dry-run`.
 
@@ -61,6 +62,7 @@ npm run login        # a normal Chrome window opens on the collector's profile:
 
 The sign-in happens in an **ordinary, non-automated** window because Shopify's login page reloads in a loop for an automated browser. The collector does not try to hide its automation.
 
+- **Sharing a profile that stays signed in.** Set `"browserChannel": "msedge"` and `"profileDir"` to the absolute path of an Edge profile another collector on this PC already keeps signed in to Shopify (for example the SB GP collector's). The collector then uses that sign-in, never changes that profile's settings, and waits (up to `profileWaitMinutes`, default 45) while the other program has the profile open; if it stays busy the run ends with exit 35 and the dashboard shows it. ShipStation needs one sign-in on that profile: `npm run login:shipstation`.
 - **Keeping the sign-in between runs.** Shopify's sign-in cookies are session-only, so the collector switches on Chrome's standard **"On startup: Continue where you left off"** setting in its own profile. Without it the sign-in is lost whenever the collector's browser closes; with it, consecutive runs reuse it.
 - **If Shopify signs the collector out anyway.** A scheduled run closes its automated window and opens a **normal window** at the Shopify admin. A person signs in, or just closes the window if it already shows the admin home. The run then continues. If nobody does so within `signInWaitMinutes`, it stops with exit 20 and the dashboard shows the failed import.
 

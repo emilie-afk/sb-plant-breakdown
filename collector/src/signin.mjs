@@ -26,6 +26,7 @@ export function browserExe(cfg) {
 // Chrome: Settings → On startup → Continue where you left off (value 1).
 // Only touches the collector's own profile, and only while no browser has it open.
 export function keepSessionsAcrossRestarts(cfg) {
+  if (localPaths(cfg).sharedProfile) return false;   // never change another program's profile
   const prefs = path.join(localPaths(cfg).profile, 'Default', 'Preferences');
   if (!fs.existsSync(prefs)) return false;
   try {
@@ -46,6 +47,9 @@ export async function signInWithNormalWindow(cfg, minutes = 30, log = console.lo
   if (!exe || !fs.existsSync(exe)) throw new Error('Browser not found for browserChannel ' + cfg.browserChannel);
   const profile = localPaths(cfg).profile;
   fs.mkdirSync(profile, { recursive: true });
+  // A window opened on a profile another browser is using would land in that
+  // (possibly automated) browser: wait until the profile is free.
+  await (await import('./browser.mjs')).waitForProfile(cfg, log);
   keepSessionsAcrossRestarts(cfg);
   log(`${label} needs a person to sign in. A normal ${cfg.browserChannel || 'Chromium'} window is opening: sign in (and 2FA), ` +
       `wait for the ${label} home page, then CLOSE that window.${minutes ? ' Waiting up to ' + minutes + ' min.' : ''}`);

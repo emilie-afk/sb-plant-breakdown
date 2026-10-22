@@ -23,6 +23,32 @@ export function reportUrl(cfg) {
   return u.origin + '/dashboard/reports/ProductSales';
 }
 
+// ---- "the automated window did not work" --------------------------------
+// When the automated ShipStation window is not signed in (a sign-in page, a
+// human check, an unexpected page), it is closed and NOT opened again by later
+// runs: ShipStation's sign-in page refuses automated browsers, so reopening it
+// only puts an unusable window in front of a person. Market collection waits,
+// the dashboard shows "ShipStation sign-in needed", and the block is lifted
+// when a person signs in through the normal window:
+//   npm run login:shipstation      (or: node src/login.mjs --config config.local.json --shipstation)
+// or for a one-off retry: node src/collect.mjs --config config.local.json --retry-shipstation
+export const SIGNIN_BLOCK_FILE = 'shipstation-signin.json';
+export function readSignInBlock(baseDir) {
+  try {
+    const j = JSON.parse(fs.readFileSync(baseDir + '/' + SIGNIN_BLOCK_FILE, 'utf8').replace(/^\uFEFF/, ''));
+    return j && j.blocked ? j : null;
+  } catch { return null; }
+}
+export function writeSignInBlock(baseDir, reason, now = new Date()) {
+  const prev = readSignInBlock(baseDir);
+  const rec = { blocked: true, since: prev ? prev.since : now.toISOString(), lastSeen: now.toISOString(), reason: String(reason || '').slice(0, 200) };
+  fs.writeFileSync(baseDir + '/' + SIGNIN_BLOCK_FILE, JSON.stringify(rec, null, 2));
+  return rec;
+}
+export function clearSignInBlock(baseDir) {
+  try { fs.rmSync(baseDir + '/' + SIGNIN_BLOCK_FILE, { force: true }); } catch { /* nothing to clear */ }
+}
+
 //   authenticated | login_required | captcha | unknown
 export async function authState(page) {
   let url;

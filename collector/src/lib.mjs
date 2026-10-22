@@ -21,7 +21,8 @@ export const EXIT = {
   UNKNOWN_PAGE: 22,
   EXPORT_FAILED: 30,     // page or download did not work
   UPLOAD_FAILED: 31,     // Worker unreachable, or refused the report
-  VALIDATION_FAILED: 34  // the file was downloaded but did not pass checks; nothing uploaded
+  VALIDATION_FAILED: 34, // the file was downloaded but did not pass checks; nothing uploaded
+  PROFILE_BUSY: 35       // the shared browser profile stayed in use by another program
 };
 
 // ---- dates (always in the store's time zone, whatever the PC's zone) ----
@@ -142,7 +143,7 @@ function closedMonthEnd(key) {
 export function failureCodeFor(exit) {
   return ({ [EXIT.SIGN_IN_NEEDED]: 'sign_in_needed', [EXIT.CAPTCHA]: 'captcha', [EXIT.UNKNOWN_PAGE]: 'unknown_page',
             [EXIT.EXPORT_FAILED]: 'export_failed', [EXIT.VALIDATION_FAILED]: 'validation_failed',
-            [EXIT.UPLOAD_FAILED]: 'upload_failed' })[exit] || null;
+            [EXIT.UPLOAD_FAILED]: 'upload_failed', [EXIT.PROFILE_BUSY]: 'profile_in_use' })[exit] || null;
 }
 
 export function customPeriod(start, end) {
