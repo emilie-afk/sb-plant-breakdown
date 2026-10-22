@@ -12,19 +12,47 @@ import { parseSummaryNumber } from './lib.mjs';
 export function localPaths(cfg) {
   const base = cfg.localDir || path.join(process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || '.', 'AppData', 'Local'), 'sb-plant-breakdown-collector');
   const suffix = cfg.browserChannel ? '-' + cfg.browserChannel : '';
+  // profileDir: an existing browser profile to share (for example the one
+  // another collector on this PC already keeps signed in to Shopify). It must
+  // be an absolute path; runs wait while another program has it open.
+  if (cfg.profileDir && !path.isAbsolute(cfg.profileDir)) throw new Error('profileDir must be an absolute path.');
   return {
     base,
-    profile: path.join(base, 'profile' + suffix),
+    profile: cfg.profileDir ? path.resolve(cfg.profileDir) : path.join(base, 'profile' + suffix),
+    sharedProfile: !!cfg.profileDir,
     runs: path.join(base, 'runs'),
     quarantine: path.join(base, 'quarantine'),
     lock: path.join(base, 'collector.lock')
   };
 }
 
-export async function launch(cfg, { headed }) {
+// Chromium holds <profile>\lockfile open (no sharing) while a browser uses
+// the profile. Two browsers cannot use one profile at the same time.
+export function profileInUse(profile) {
+  const lock = path.join(profile, 'lockfile');
+  if (!fs.existsSync(lock)) return false;
+  try { fs.closeSync(fs.openSync(lock, 'r+')); return false; }
+  catch (e) { return e.code === 'EBUSY' || e.code === 'EPERM' || e.code === 'EACCES'; }
+}
+export async function waitForProfile(cfg, log = () => {}) {
+  const profile = localPaths(cfg).profile;
+  const minutes = cfg.profileWaitMinutes ?? 45;
+  const end = Date.now() + minutes * 60000;
+  let told = false;
+  while (profileInUse(profile)) {
+    if (Date.now() >= end) {
+      throw Object.assign(new Error(`browser profile in use by another program for ${minutes} min`), { code: 'profile_in_use' });
+    }
+    if (!told) { log(`The browser profile is in use (another collector?); waiting up to ${minutes} min.`); told = true; }
+    await new Promise(r => setTimeout(r, 30000));
+  }
+}
+
+export async function launch(cfg, { headed, log } = {}) {
   const { chromium } = await import('playwright');
   const paths = localPaths(cfg);
   fs.mkdirSync(paths.profile, { recursive: true });
+  await waitForProfile(cfg, log);
   const opts = { headless: !headed, acceptDownloads: true, viewport: { width: 1400, height: 900 } };
   if (cfg.browserChannel) opts.channel = cfg.browserChannel;
   const context = await chromium.launchPersistentContext(paths.profile, opts);

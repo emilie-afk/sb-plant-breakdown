@@ -26,7 +26,8 @@ $start = [datetimeoffset]::Parse($trig.StartBoundary)
 $codes = @{ 0 = 'success'; 267009 = 'still running'; 267011 = 'has not run yet'; 267014 = 'terminated by a person';
             5 = 'collector exit 5: another run held the lock'; 10 = 'collector exit 10: config';
             20 = 'collector exit 20: Shopify sign-in needed'; 21 = 'collector exit 21: human check'; 22 = 'collector exit 22: unexpected page';
-            30 = 'collector exit 30: export failed'; 31 = 'collector exit 31: upload failed'; 34 = 'collector exit 34: file failed checks' }
+            30 = 'collector exit 30: export failed'; 31 = 'collector exit 31: upload failed'; 34 = 'collector exit 34: file failed checks';
+            35 = 'collector exit 35: browser profile in use by another program' }
 function Describe($c) { $n = [int64]$c; $d = $codes[[int]($n -band 0x7fffffff)]; if ($n -le 0x7fffffff -and $d) { "$n ($d)" } else { "$n (0x{0:X})" -f $n } }
 
 Write-Host "Task:        $TaskName"
