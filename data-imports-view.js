@@ -143,6 +143,11 @@
     AUTO.status = "loading"; AUTO.error = null; renderStatus();
     try {
       var reports = (await api("/v1/reports")).body.reports || [];
+      // Products Master vendor map (built by the collector), read-only.
+      try {
+        var vmS = (await api("/v1/settings/vendor_map")).body.setting;
+        window.SBVendorMap = vmS ? { map: vmS.value, version: vmS.version, updatedAt: vmS.updatedAt } : null;
+      } catch (ve) { console.warn("vendor map:", ve); }
       // Confirmed classification corrections, read-only, for every viewer.
       try {
         var so = (await api("/v1/settings/classification_overrides")).body.setting;

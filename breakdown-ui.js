@@ -106,7 +106,7 @@
   // ----------------------------------------------------------
   // A column is { k, label, cls, cell(row, ctx) -> html, sortVal(row, ctx) }.
   function headHtml(cols, sort, attr) {
-    return cols.map(function (c) {
+    return cols.filter(function (c) { return !c.csvOnly; }).map(function (c) {
       var arrow = sort && sort.col === c.k ? (sort.dir === "desc" ? " ▾" : " ▴") : "";
       var lbl = typeof c.label === "function" ? c.label() : c.label;
       return '<th class="' + (c.cls || "") + '" data-' + attr + '="' + c.k + '"' +
@@ -131,7 +131,7 @@
   function rowsHtml(rows, cols, ctx) {
     return rows.map(function (r) {
       return "<tr" + (r.excluded ? ' class="excluded-row"' : "") + ">" +
-        cols.map(function (c) {
+        cols.filter(function (c) { return !c.csvOnly; }).map(function (c) {
           var out = c.cell(r, ctx);
           return /^\s*<td/i.test(out) ? out : '<td class="' + (c.cls || "") + '">' + out + "</td>";
         }).join("") + "</tr>";
@@ -184,8 +184,9 @@
   }
 
   // Filter -> sort -> paginate -> paint. Returns the pagination descriptor.
+  // A column marked csvOnly is exported but not drawn on screen.
   function renderTable(opts) {
-    var cols = opts.cols, ctx = opts.ctx || {};
+    var cols = opts.cols.filter(function (c) { return !c.csvOnly; }), ctx = opts.ctx || {};
     var sorted = sortRows(opts.rows, cols, opts.sort, ctx);
     var p = root.paginate(sorted, opts.pageState ? opts.pageState.page : 1,
                           opts.pageState ? opts.pageState.pageSize : null);

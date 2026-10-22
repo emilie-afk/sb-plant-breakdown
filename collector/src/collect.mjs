@@ -10,6 +10,8 @@
 //   --no-backfill     skip historical months this run
 //   --only shopify|market   collect one source only (default: both, when
 //                     config.shipstation is set)
+//   --refresh-vendor-map  rebuild the Products Master vendor map now, even if
+//                     today's is fresh (it is otherwise rebuilt once a day)
 //   --retry-shipstation  try the automated ShipStation window once more even
 //                     though an earlier run found it signed out (see below)
 //
@@ -83,6 +85,12 @@ export async function main() {
       const { ingestSecret } = await import('./credentials.mjs');
       try { secret = ingestSecret(cfg); }
       catch (e) { console.error(safeError(e)); return EXIT.CONFIG; }
+    }
+    // Product -> vendor map from the Products Master vendor tabs (once a day;
+    // never blocks the sales collection).
+    if (cfg.vendorMaster && !fromFile && only !== 'market') {
+      const VMod = await import('./vendormap.mjs');
+      await VMod.refreshVendorMap(cfg, { secret, dryRun, baseDir: paths.base, log, force: flag('refresh-vendor-map') });
     }
     // Historical months missing from shared storage, where Shopify has data.
     const statePath = path.join(paths.base, 'backfill-state.json');

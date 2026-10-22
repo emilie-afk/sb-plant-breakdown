@@ -542,7 +542,7 @@
   // still honoured for records that now have an identifier.
   function legacyOverrideKeyFor(rec) {
     return (rec && rec.channel ? rec.channel : "shopify") + OVERRIDE_SEP +
-           [rec && rec.title, (rec && rec.vendor) || "", (rec && rec.ptype) || ""].join(OVERRIDE_SEP);
+           [rec && rec.title, (rec && (rec.vendorImported != null ? rec.vendorImported : rec.vendor)) || "", (rec && rec.ptype) || ""].join(OVERRIDE_SEP);
   }
   function overrideKeyFor(rec) {
     if (rec && rec.overrideKey) return rec.overrideKey;

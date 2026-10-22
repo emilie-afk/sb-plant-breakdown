@@ -6,6 +6,7 @@ const gd  = fs.readFileSync('genus-data.js', 'utf8');
 const exc = fs.readFileSync('exclusions.js', 'utf8');
 const rpt = fs.readFileSync('shopify-report.js', 'utf8');
 const grp = fs.readFileSync('product-grouping.js', 'utf8');
+const vmr = fs.readFileSync('vendor-master.js', 'utf8');
 const svw = fs.readFileSync('shopify-views.js', 'utf8');
 const apa = fs.readFileSync('amazon-parse.js', 'utf8');
 const arp = fs.readFileSync('amazon-report.js', 'utf8');
@@ -29,6 +30,7 @@ html = html.replace('<script src="genus-data.js"></script>', () => '<script>' + 
 html = html.replace('<script src="exclusions.js"></script>', () => '<script>' + exc + '</script>');
 html = html.replace('<script src="shopify-report.js"></script>', () => '<script>' + rpt + '</script>');
 html = html.replace('<script src="product-grouping.js"></script>', () => '<script>' + grp + '</script>');
+html = html.replace('<script src="vendor-master.js"></script>', () => '<script>' + vmr + '</script>');
 html = html.replace('<script src="amazon-parse.js"></script>', () => '<script>' + apa + '</script>');
 html = html.replace('<script src="amazon-report.js"></script>', () => '<script>' + arp + '</script>');
 html = html.replace('<script src="breakdown-ui.js"></script>', () => '<script>' + bui + '</script>');
@@ -70,7 +72,7 @@ if (html.includes('__SB_SHARED_URL__') || html.includes('__SB_SHARED_KEY__')) {
 console.log('  Shared storage:', sharedUrl && sharedKey ? 'read-only connection built in' : 'not built in (each browser connects under Data settings)');
 if (html.includes('src="genus-data.js"') || html.includes('src="exclusions.js"') ||
     html.includes('src="app.js"') || html.includes('src="shopify-report.js"') ||
-    html.includes('src="product-grouping.js"') || html.includes('src="shopify-views.js"') ||
+    html.includes('src="product-grouping.js"') || html.includes('src="vendor-master.js"') || html.includes('src="shopify-views.js"') ||
     html.includes('src="amazon-report.js"') || html.includes('src="amazon-parse.js"') || html.includes('src="breakdown-ui.js"') ||
     html.includes('src="classification-review.js"') || html.includes('src="amazon-views.js"') || html.includes('src="shared-sync.js"') || html.includes('src="data-imports-view.js"') || html.includes('src="period-engine.js"') || html.includes('src="period-view.js"') || html.includes('src="market-report.js"') || html.includes('src="market-view.js"') || html.includes('src="channel-guard.js"') ||
     html.includes('cdn.jsdelivr.net/npm/lz-string')) {

@@ -101,6 +101,19 @@ Product tables and exports show the **imported product type** (never rewritten) 
 
 The "classifications to review" panel lists rows where the imported type disagrees with the title and the title did not settle it. A composite type (gift, kit, subscription) over a component title is not flagged.
 
+## Vendors from the Products Master
+
+Shopify's "Product vendor" tells suppliers apart only while each supplier has its own Shopify location. When several suppliers' products move into one shared location, the vendor is taken from the **Products Master** vendor tabs instead (`vendor-master.js`):
+
+- Once a day the collector reads the configured vendor tabs (the sheet's public CSV export) and the store's public catalog (`/products.json`: product id, handle, title, current Shopify vendor, variant SKUs), builds a product → vendor map and stores it in shared storage (`POST /v1/ingest/vendor-map`, setting `vendor_map`). A failure never stops the sales collection; the previous map stays in use.
+- Match order per product: suppliers listed in `keepShopifyVendors` (those not moving) keep the Shopify vendor; then a Products Master link naming the product id or handle; then the variant SKUs found in exactly one vendor's tab; then the Shopify name; then a configured supplier SKU prefix (e.g. `AS-`). Two vendors matching at the same step is a conflict: nothing is chosen.
+- Products the storefront catalog does not show (unpublished, drafts) have no SKUs to match, so the dashboard matches the sales row's product title against the names listed in the tabs (Shopify name, Plant Name, Product), used only when exactly one vendor lists that name.
+- `vendorAliases` shows several Shopify vendor names of one supplier as one vendor (House Plant Wholesale and House Plant Shop are House Plant Dropship); the Shopify name stays in the export.
+- `typeVendors` assigns a product type to one supplier when its products are not listed in any tab (subscriptions are fulfilled by MCG, shown under MCG's Shopify vendor name).
+- Products still unknown (not in the sheet, or a conflict) keep the Shopify vendor.
+- The dashboard applies the map to every report, including history: the vendor is a property of the product. The Shopify vendor is never overwritten; product exports carry **Vendor**, **Shopify vendor** and **Vendor source** columns, and the provenance line says how many products took their vendor from the Products Master and how old the map is.
+- A new map that resolves far fewer products than the stored one (a tab renamed, a column moved) is refused by the Worker unless forced. The sheet id and tab gids are configuration (`vendorMaster` in the collector's `config.local.json`), never in the repository.
+
 ## Sales channels and marketplace orders
 
 Amazon orders are synced into Shopify through Sellbrite, so Shopify reports can contain them:

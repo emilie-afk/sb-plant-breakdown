@@ -96,11 +96,21 @@
   // of waiting for the next import. Only the derived grouping fields are
   // touched; title, vendor, imported product type and every figure are the
   // values the source stated.
+  // The vendor of each product comes from the Products Master vendor map when
+  // it knows the product (several suppliers share one Shopify location, so
+  // Shopify's vendor no longer tells them apart); the Shopify vendor is kept
+  // as vendorImported and used for products the map does not know.
+  function vendorMap() { return window.SBVendorMap && window.SBVendorMap.map ? window.SBVendorMap.map : null; }
   function reclassify(recs) {
     var ov = PG.makeOverrideLookup(window.SBOverrides.load());
     var opts = Object.assign(detectorOpts(), { override: ov });
+    var vmap = vendorMap();
     for (var i = 0; i < recs.length; i++) {
       var r = recs[i];
+      if (window.applyVendor) {
+        var va = window.applyVendor(r, vmap);
+        r.vendor = va.vendor; r.vendorImported = va.vendorImported; r.vendorBasis = va.vendorBasis;
+      }
       var c = PG.classifyRecord(r, opts);
       r.group = c.group;
       r.groupType = c.groupType;
@@ -480,6 +490,19 @@
   }
   function round2(v) { return Math.round((v + Number.EPSILON) * 100) / 100; }
 
+  // Where the vendors on this page come from, plainly.
+  function vendorSourceLine(recs) {
+    var w = window.SBVendorMap;
+    if (!w || !w.map) return "<b>Vendors</b> as stated by Shopify (no Products Master vendor map yet)";
+    var fromMaster = 0, notIn = 0;
+    recs.forEach(function (r) { if (/^products_master/.test(r.vendorBasis || "")) fromMaster++; else if (r.vendorBasis === "shopify_not_in_master") notIn++; });
+    var age = w.map.generatedAt ? Math.round((Date.now() - Date.parse(w.map.generatedAt)) / 86400000) : null;
+    return "<b>Vendors</b> from the Products Master for " + fromMaster + " products" +
+      (notIn ? " · " + notIn + " not listed there use the Shopify vendor" : "") +
+      (age != null ? " · map " + (age <= 0 ? "updated today" : age + " day" + (age === 1 ? "" : "s") + " old") : "") +
+      (age != null && age > 2 ? ' <span class="badge type-other">stale</span>' : "");
+  }
+
   function renderProvenance(id, snap, all, excluded, scoped) {
     var el = document.getElementById(id);
     if (!el) return;
@@ -493,7 +516,7 @@
     parts.push("<b>Source</b> " + esc(m.sourceFilename || snap.fileName || "manual upload"));
     parts.push("<b>Timezone</b> " + (m.timezone || STORE_TZ));
     parts.push("<b>Currency</b> " + (m.currency || "—"));
-    parts.push("<b>Product Master</b> not loaded");
+    parts.push(vendorSourceLine(all.concat(excluded)));
     var html = '<div class="prov">' + parts.join("<span>·</span>") + "</div>";
 
     var notes = [];
@@ -676,7 +699,16 @@
           "</td>";
       } },
     { k: "vendor", label: "Vendor", sortVal: function (r) { return r.vendor; },
-      cell: function (r) { return "<td>" + esc(r.vendor) + "</td>"; } },
+      cell: function (r) {
+        return "<td>" + esc(r.vendor) + (r.vendorImported != null && r.vendorImported !== r.vendor
+          ? ' <span class="small" style="color:var(--muted)" title="Vendor from the Products Master; Shopify states another vendor">(Shopify: ' + esc(r.vendorImported) + ")</span>" : "") + "</td>";
+      },
+      csv: function (r) { return r.vendor; } },
+    { k: "vendorImported", label: "Shopify vendor", sortVal: function (r) { return r.vendorImported || r.vendor; },
+      cell: function (r) { return '<td class="small">' + esc(r.vendorImported != null ? r.vendorImported : r.vendor) + "</td>"; },
+      csv: function (r) { return r.vendorImported != null ? r.vendorImported : r.vendor; }, csvOnly: true },
+    { k: "vendorBasis", label: "Vendor source", cell: function (r) { return "<td>" + esc(r.vendorBasis || "shopify") + "</td>"; },
+      csv: function (r) { return r.vendorBasis || "shopify"; }, csvOnly: true },
     { k: "ptype", label: "Imported product type",
       title: "Exactly as the Shopify export stated it. An override never rewrites this.",
       sortVal: function (r) { return r.ptype; },

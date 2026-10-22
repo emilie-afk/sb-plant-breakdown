@@ -60,7 +60,8 @@
         var row = {
           productId: p.productId || null,
           title: p.title,
-          vendor: rich ? p.vendor : "",
+          // the vendor as Shopify stated it, never the Products Master vendor shown on screen
+          vendor: rich ? (p.vendorImported != null ? p.vendorImported : p.vendor) : "",
           productType: rich && !p.ptypeBlank ? p.ptype : "",
           cur: pick(cur),
           prior: rich && p.priorKnown ? pick(p.prior) : null

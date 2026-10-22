@@ -11,6 +11,19 @@
   "_profileDirComment": "Optional absolute path of an existing browser profile to share (e.g. one another collector keeps signed in to Shopify). Runs wait up to profileWaitMinutes while another program has it open.",
   "profileDir": null,
   "profileWaitMinutes": 45,
+  "_vendorMasterComment": "Optional. Products Master vendor tabs that say which supplier each product comes from (used when several suppliers share one Shopify location, so Shopify's vendor no longer tells them apart). Public CSV export of the sheet; the sheet id and tab gids stay in config.local.json. sku/name/link are column headers ('SKU#1' = the first column named SKU). keepShopifyVendors keep the Shopify vendor.",
+  "vendorMaster": null,
+  "_vendorMasterExample": {
+    "sheetId": "<products-master-sheet-id>",
+    "storeUrl": "https://your-store.example",
+    "refreshHours": 20,
+    "keepShopifyVendors": ["<vendor that is not moving>"],
+    "vendorAliases": { "<other Shopify name of a supplier>": "<vendor to show>" },
+    "typeVendors": { "<product type>": "<vendor that supplies it>" },
+    "tabs": [
+      { "label": "<tab name>", "gid": "<tab gid>", "vendor": "<vendor name as in Shopify>", "sku": ["SKU"], "name": ["Shopify Name"], "link": ["Shopify Link"], "skuPrefix": ["<optional SKU prefix>"] }
+    ]
+  },
   "_signInWaitComment": "Minutes a headed run waits for a person to finish signing in (2FA) before giving up. 0-120.",
   "signInWaitMinutes": 30,
   "localDir": null,

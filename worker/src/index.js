@@ -6,6 +6,8 @@
 //   POST /v1/ingest/product-report          INGEST_SECRET (collector) or DASHBOARD_SECRET (manual upload)
 //   POST /v1/ingest/collection-failure      INGEST_SECRET  {source, reportScope, period, errorCode, message}
 //   GET  /v1/ingest/coverage?source=&scope= INGEST_SECRET  stored periods only (dates, revisions), no rows
+//   POST /v1/ingest/vendor-map              INGEST_SECRET or DASHBOARD_SECRET  product -> vendor map from
+//                                           the Products Master (stored as setting "vendor_map")
 //   GET  /v1/reports?source=shopify         DASHBOARD_SECRET or VIEWER_SECRET   (&history=1: every revision)
 //   GET  /v1/reports/:id/rows               DASHBOARD_SECRET or VIEWER_SECRET
 //   GET  /v1/imports?source=&limit=         DASHBOARD_SECRET or VIEWER_SECRET
@@ -25,6 +27,7 @@
 // ============================================================
 import { validateProductReport, contentHash } from "./validate.js";
 import * as store from "./store.js";
+import { validateVendorMap, suspiciousDrop } from "./vendormap.js";
 
 const MAX_BODY = 8 * 1024 * 1024;
 
@@ -172,6 +175,22 @@ export default {
       if (req.method === "POST" && url.pathname === "/v1/ingest/collection-failure") {
         if (role !== "collector") return reply({ ok: false, error: "forbidden" }, 403);
         return reply(await recordCollectionFailure(req, env));
+      }
+
+      // The product -> vendor map built by the collector from the Products
+      // Master vendor tabs. Replaces the stored map, unless far fewer products
+      // resolve than before (a broken read), which is refused without force.
+      if (req.method === "POST" && url.pathname === "/v1/ingest/vendor-map") {
+        if (role !== "collector" && role !== "dashboard") return reply({ ok: false, error: "forbidden" }, 403);
+        const body = await readJson(req);
+        const v = validateVendorMap(body && body.map);
+        if (!v.ok) return reply({ ok: false, error: "invalid_vendor_map", errors: v.errors }, 400);
+        const cur = await store.getSetting(env.DB, "vendor_map");
+        const drop = body.force ? null : suspiciousDrop(v.value, cur && cur.value);
+        if (drop) return reply({ ok: false, error: "suspicious_drop", message: drop }, 409);
+        const r = await store.putSetting(env.DB, "vendor_map", v.value, cur ? cur.version : 0, role === "collector" ? "collector" : "dashboard");
+        if (!r.ok) return reply({ ok: false, error: "conflict", currentVersion: r.currentVersion }, 409);
+        return reply({ ok: true, version: r.version, entries: Object.keys(v.value.entries).length });
       }
 
       // Which periods are already stored, so the collector can backfill gaps
