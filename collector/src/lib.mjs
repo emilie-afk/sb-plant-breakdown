@@ -1,6 +1,7 @@
 // collector/src/lib.mjs — pure functions, no browser, no network.
 // Everything here is unit-tested (tests/collector.test.mjs).
 import { createRequire } from 'node:module';
+import { validateVendorMasterConfig } from './vendormap.mjs';
 const require = createRequire(import.meta.url);
 // The dashboard's own validated parser: the collector refuses exactly what
 // the dashboard would refuse.
@@ -331,6 +332,7 @@ export function validateConfig(cfg) {
       catch { errs.push('shipstation.baseUrl is not a URL.'); }
     }
   }
+  if (cfg.vendorMaster != null) errs.push(...validateVendorMasterConfig(cfg.vendorMaster));
   for (const k of Object.keys(cfg)) {
     if (/secret|password|token|apikey|api_key/i.test(k) && !/CredentialTarget$/.test(k)) errs.push(`Config key "${k}" looks like a secret. Secrets belong in Windows Credential Manager, not the config file.`);
   }

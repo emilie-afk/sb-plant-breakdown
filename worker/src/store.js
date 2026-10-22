@@ -224,7 +224,7 @@ export async function storeReport(db, n, hash) {
 
 // ---- settings ----------------------------------------------
 export const SETTING_KEYS = new Set([
-  "classification_overrides", "catalog_mappings", "amazon_column_mappings"
+  "classification_overrides", "catalog_mappings", "amazon_column_mappings", "vendor_map"
 ]);
 export async function getSetting(db, key) {
   const r = await db.prepare(`SELECT * FROM settings WHERE key = ?`).bind(key).first();
