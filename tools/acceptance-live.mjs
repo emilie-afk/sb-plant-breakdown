@@ -3,9 +3,8 @@
 //   node tools/acceptance-live.mjs https://<site>.netlify.app [outDir]
 //
 // Opens the site in a FRESH Chrome profile (no saved data, no key), in a
-// visible window. A PERSON types the dashboard password into the sign-in form
-// (checked by the server); this script never handles that password or any
-// Worker key. It also checks that no data is shown and no API answers before
+// visible window. A PERSON clicks "Sign in with Google" and signs in with an
+// allowed account; this script never handles a password, token or Worker key. It also checks that no data is shown and no API answers before
 // sign-in, and that the session is HttpOnly and not readable by the page. Then it
 // checks, without uploading anything:
 //   - the latest saved Shopify report loads by itself; no file input is shown
@@ -60,10 +59,13 @@ function parseCsvText(text) {
 }
 
 async function waitUnlocked(label) {
-  console.log(`[${label}] If the site password screen is showing, type the password in the Chrome window (up to 10 minutes)...`);
+  console.log(`[${label}] If the sign-in screen is showing, click "Sign in with Google" in the Chrome window and sign in (up to 10 minutes)...`);
   // Local test build only: its throwaway test password comes from the test harness.
-  if (localTest && process.env.LOCAL_TEST_SITEPW && await page.isVisible('#sb-login')) {
-    await page.fill('#sb-login-password', process.env.LOCAL_TEST_SITEPW); await page.click('#sb-login-submit');
+  // Local harness only: its fake Google lists test accounts; pick one. On a real
+  // site a PERSON clicks "Sign in with Google" and signs in.
+  if (localTest && process.env.LOCAL_TEST_GOOGLE_EMAIL && await page.isVisible('#sb-login')) {
+    await page.click('#sb-login-submit');
+    await page.click(`[data-account="${process.env.LOCAL_TEST_GOOGLE_EMAIL}"]`);
   }
   await page.waitForSelector('#sb-login', { state: 'hidden', timeout: 600000 });
   await page.waitForSelector('#sb-data-status', { timeout: 60000 });

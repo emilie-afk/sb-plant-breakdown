@@ -165,16 +165,14 @@ html.sb-locked body > *:not(#sb-login) { visibility: hidden !important; }
   </div>
 </div>
 
-<!-- Sign-in: one password, checked on the server. -->
+<!-- Sign-in: Google accounts on the allow-list (checked on the server). -->
 <div id="sb-login" style="display:none;position:fixed;inset:0;background:rgba(247,250,247,.97);z-index:1000;align-items:center;justify-content:center">
-  <form id="sb-login-form" class="panel" style="width:min(360px,92vw);padding:22px" autocomplete="on">
+  <div id="sb-login-form" class="panel" style="width:min(360px,92vw);padding:22px">
     <h2 style="margin:0 0 10px 0">Sign in</h2>
-    <label for="sb-login-password" class="small">Dashboard password</label>
-    <input id="sb-login-password" name="password" type="password" autocomplete="current-password" required maxlength="512"
-           style="width:100%;padding:8px 10px;margin:6px 0 12px 0;border:1px solid var(--border);border-radius:6px">
-    <button id="sb-login-submit" type="submit">Sign in</button>
-    <div id="sb-login-msg" class="small" style="color:#b71c1c;margin-top:8px" role="alert"></div>
-  </form>
+    <p class="small" style="margin:0 0 14px 0">Use your Google account. Only accounts the owner has added can open the dashboard.</p>
+    <button id="sb-login-submit" type="button">Sign in with Google</button>
+    <div id="sb-login-msg" class="small" style="color:#b71c1c;margin-top:10px" role="alert"></div>
+  </div>
   <div id="sb-logout-panel" class="panel" style="display:none;width:min(420px,92vw);padding:22px">
     <h2 style="margin:0 0 10px 0">Sign out</h2>
     <div id="sb-logout-msg" class="small" role="alert" style="margin-bottom:12px"></div>

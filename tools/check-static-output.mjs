@@ -7,11 +7,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
-export const SERVER_ONLY_VARS = ['SESSION_SECRET', 'DASHBOARD_VIEWER_PASSWORD_HASH', 'DASHBOARD_EDITOR_PASSWORD_HASH',
+export const SERVER_ONLY_VARS = ['SESSION_SECRET', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_ALLOWED_EMAILS', 'GOOGLE_EDITOR_EMAILS',
   'WORKER_VIEWER_SECRET', 'WORKER_UPLOAD_SECRET', 'WORKER_SETTINGS_SECRET', 'WORKER_AUTH_SECRET', 'WORKER_URL',
   'STOCK_TRACKER_PASSWORD', 'STOCK_TRACKER_URL',
   // retired build-time variables: must not leak if still set on Netlify
-  'SB_SHARED_KEY', 'SB_SHARED_URL', 'SB_MCG_PASSWORD', 'APP_PASSWORD'];
+  'SB_SHARED_KEY', 'SB_SHARED_URL', 'SB_MCG_PASSWORD', 'APP_PASSWORD',
+  'DASHBOARD_VIEWER_PASSWORD_HASH', 'DASHBOARD_EDITOR_PASSWORD_HASH'];
 const PATTERNS = [
   [/__SB_[A-Z_]+__/, 'a secret placeholder'],
   [/sb-shared-key|sb-mcg-password/, 'a key meta tag'],

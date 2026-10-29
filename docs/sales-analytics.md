@@ -7,7 +7,7 @@ This is how the product breakdown, vendor analytics, shared storage and the Wind
 ```
 node --test tests/*.test.mjs          # no dependencies; uses synthetic fixtures only
 bash build.sh                         # builds dist/ and checks it for secrets
-DEV_VIEWER_PASSWORD=… DEV_EDITOR_PASSWORD=… node tools/devserver.mjs --seed --port 8778
+node tools/devserver.mjs --seed --port 8778   # sign in with its fake Google test accounts
                                       # real functions + Worker in memory, synthetic data; open http://127.0.0.1:8778
 node tools/make-sample-fixtures.mjs   # regenerate the synthetic fixtures
 ```
@@ -190,7 +190,7 @@ See `collector/README.md`. It exports the saved report through the normal report
 | `worker/verify-worker.ps1 -Url https://…` | changes nothing: health ok, `/v1/reports` without a key → 401, the stored viewer key → 200, report-history fields present, viewer writes → 403, collector coverage → 200 |
 | `collector/windows/check-task.ps1` | changes nothing: task state, trigger, next run, last result, and a **verified scheduled run** only when Task Scheduler history ties one instance's time trigger, start, result 0 and completion to a clean collector log; otherwise *not verified* |
 | `node tools/acceptance-live.mjs https://<site>` | changes nothing: a fresh visible Chrome, a person signs in, then automatic checks of auto-load, history, CSV, quarter/year totals, missing months and reload |
-| Netlify env (scope Functions) `WORKER_URL`, `WORKER_*_SECRET`, `SESSION_SECRET`, password hashes | server-side only: sign-in and the allowlisted gateway (`docs/security.md`). Nothing is built into the page. |
+| Netlify env (scope Functions) `WORKER_URL`, `WORKER_*_SECRET`, `SESSION_SECRET`, `GOOGLE_*` (Google sign-in) | server-side only: sign-in and the allowlisted gateway (`docs/security.md`). Nothing is built into the page. |
 | `collector/windows/install-task.ps1 -At HH:mm -Apply` | **installs** the daily scheduled task (without `-Apply` it only prints the proposal; `-Uninstall` removes it) |
 | `collector/windows/run-task.ps1` | what the scheduled task runs: one collection, logged locally |
 | `npm run login` (in `collector/`) | opens a normal browser window for a person to sign in to Shopify once |

@@ -1,195 +1,254 @@
-// Server-verified sessions: sign-in, cookie, expiry, forgery, revocation,
-// generations, CSRF, origin, durable sign-in limits, fail-closed config.
+// Sign in with Google (server-side OAuth code flow + PKCE), the allow-list,
+// server-verified sessions, logout, CSRF and the durable, concurrency-safe
+// sign-in limits. Google's network is replaced (tests/google-mock.mjs); the
+// production configuration (real endpoint URLs and issuer) is what is tested.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import * as S from '../server/session.mjs';
 import { sessionHandler } from '../server/handlers.mjs';
+import { googleStart, googleCallback, verifyIdToken, _resetJwksCache } from '../server/google.mjs';
 import worker from '../worker/src/index.js';
 import { makeD1 } from './d1shim.mjs';
 import { ROOT } from './load.mjs';
+import { ENV, ORIGIN, CLIENT_ID, AUTH_KEY, makeGoogle, cookieValue } from './google-mock.mjs';
 
-// The real Worker (real migrations, Node SQLite) answers the gateway's
-// attempt-counter calls, each after a random delay so concurrent requests
-// genuinely interleave.
-const AUTH_KEY = 'a'.repeat(40);
-function workerFetch({ delay = 5, wenv } = {}) {
-  const e = wenv || { DB: makeD1(path.join(ROOT, 'worker', 'migrations')), AUTH_SECRET: AUTH_KEY };
-  const f = async (u, init) => { await new Promise(r => setTimeout(r, Math.random() * delay)); return worker.fetch(new Request(u, init), e); };
-  f.env = e; return f;
+const get = (p, headers = {}) => new Request(ORIGIN + p, { headers });
+const setCookies = (res) => res.headers.getSetCookie();
+
+// The whole round trip: start -> (Google) -> callback. -> { res, sessionCookie, location }
+async function signIn(G, email, { env = ENV, ip = '203.0.113.1', tamper } = {}) {
+  const start = await googleStart(get('/api/auth/google/start'), { env });
+  const oauth = cookieValue(setCookies(start), S.OAUTH_COOKIE);
+  const { code, state } = G.approve(start.headers.get('location'), email);
+  let q = `?code=${code}&state=${state}`;
+  let cookie = oauth;
+  if (tamper) ({ q, cookie } = tamper({ q, cookie, code, state }));
+  const res = await googleCallback(get('/api/auth/google/callback' + q, cookie ? { cookie } : {}), { env, ip, fetchImpl: G.fetch });
+  return { res, location: res.headers.get('location'), sessionCookie: cookieValue(setCookies(res), S.COOKIE) };
 }
+const status = async (cookie, env = ENV, store = S.memoryStore()) => (await sessionHandler(get('/api/session', cookie ? { cookie } : {}), { env, store })).json();
 
-const ORIGIN = 'https://dash.example';
-const VIEW_PW = 'viewer-password-123', EDIT_PW = 'editor-password-456';
-const FAST = { N: 16384, r: 8, p: 1 };
-const VIEW_HASH = S.hashPassword(VIEW_PW, FAST), EDIT_HASH = S.hashPassword(EDIT_PW, FAST);
-export const ENV = { SESSION_SECRET: 'x'.repeat(40), DASHBOARD_VIEWER_PASSWORD_HASH: VIEW_HASH, DASHBOARD_EDITOR_PASSWORD_HASH: EDIT_HASH,
-  WORKER_URL: 'https://worker.example', WORKER_AUTH_SECRET: AUTH_KEY };
-
-function req(method, { cookie, csrf, origin = ORIGIN, body, ctype = 'application/json', ip } = {}) {
-  const h = {};
-  if (cookie) h.cookie = cookie; if (csrf) h['x-sb-csrf'] = csrf; if (origin) h.origin = origin; if (ctype) h['content-type'] = ctype;
-  if (ip) h['x-nf-client-connection-ip'] = ip;
-  return new Request(ORIGIN + '/api/session', { method, headers: h, body: body === undefined ? undefined : (typeof body === 'string' ? body : JSON.stringify(body)) });
-}
-const cookieOf = (res) => (res.headers.get('set-cookie') || '').split(';')[0];
-const sharedFetch = workerFetch();
-async function login(env, store, pw, opts = {}) {
-  const res = await sessionHandler(req('POST', { body: { password: pw }, ...opts }), { env, store, now: opts.now, fetchImpl: opts.fetchImpl || sharedFetch });
-  return { res, body: await res.json(), cookie: cookieOf(res) };
-}
-
-test('missing or weak configuration denies everything (503)', async () => {
-  for (const env of [{}, { ...ENV, SESSION_SECRET: 'short' }, { SESSION_SECRET: 'x'.repeat(40) },
-    { SESSION_SECRET: 'x'.repeat(40), DASHBOARD_VIEWER_PASSWORD_HASH: 'plaintext-password' },
-    { SESSION_SECRET: 'x'.repeat(40), DASHBOARD_VIEWER_PASSWORD_HASH: S.hashPassword(VIEW_PW, FAST).replace('$16384$', '$1024$') }]) {
-    const r = await sessionHandler(req('POST', { body: { password: VIEW_PW } }), { env, store: S.memoryStore() });
-    assert.equal(r.status, 503);
+test('configuration fails closed (sign-in, session and API all refuse)', async () => {
+  const bad = [{}, { ...ENV, SESSION_SECRET: 'short' }, { ...ENV, GOOGLE_CLIENT_ID: '' }, { ...ENV, GOOGLE_CLIENT_ID: 'not-a-google-client' },
+    { ...ENV, GOOGLE_CLIENT_SECRET: '' }, { ...ENV, GOOGLE_ALLOWED_EMAILS: '', GOOGLE_EDITOR_EMAILS: '' }, { ...ENV, GOOGLE_ALLOWED_EMAILS: 'not an email' },
+    { ...ENV, GOOGLE_REDIRECT_ORIGINS: '' }, { ...ENV, GOOGLE_REDIRECT_ORIGINS: 'http://dash.example' }, { ...ENV, GOOGLE_REDIRECT_ORIGINS: 'http://127.0.0.1:8890' },
+    { ...ENV, GOOGLE_TOKEN_URL: 'http://127.0.0.1:1/token', ALLOW_LOCAL_OAUTH: '1', GOOGLE_REDIRECT_ORIGINS: 'https://dash.example', GOOGLE_AUTH_URL: 'https://evil.example/auth' },
+    { ...ENV, GOOGLE_CLIENT_SECRET: 'x'.repeat(40) }];
+  for (const env of bad) {
+    assert.equal(S.loadAuthConfig(env).ok, false, JSON.stringify(Object.keys(env)));
+    assert.equal((await sessionHandler(get('/api/session'), { env, store: S.memoryStore() })).status, 503);
+    assert.match((await googleStart(get('/api/auth/google/start'), { env })).headers.get('location'), /signin=unavailable/);
   }
+  // endpoint overrides are ignored entirely unless ALLOW_LOCAL_OAUTH=1 (production)
+  const prod = S.loadAuthConfig({ ...ENV, GOOGLE_AUTH_URL: 'http://127.0.0.1:1/auth', GOOGLE_ISSUER: 'https://evil.example' });
+  assert.ok(prod.ok); assert.equal(prod.google.authUrl, S.GOOGLE_ENDPOINTS.authUrl); assert.deepEqual(prod.google.issuers, S.GOOGLE_ENDPOINTS.issuers);
 });
 
-test('password hashes: scrypt, salted, constant-shape, min length', async () => {
-  assert.ok(await S.verifyPassword(VIEW_PW, VIEW_HASH));
-  assert.ok(!(await S.verifyPassword(VIEW_PW + 'x', VIEW_HASH)));
-  assert.notEqual(S.hashPassword(VIEW_PW, FAST), S.hashPassword(VIEW_PW, FAST));
-  assert.throws(() => S.hashPassword('short'));
-  assert.ok(!(await S.verifyPassword('x'.repeat(600), VIEW_HASH)));
-});
-
-test('sign-in sets a Secure, HttpOnly, SameSite=Strict __Host- cookie; no password or key in the reply', async () => {
-  const store = S.memoryStore();
-  const { res, body } = await login(ENV, store, EDIT_PW);
-  assert.equal(res.status, 200);
-  assert.equal(body.role, 'editor');
-  const sc = res.headers.get('set-cookie');
-  assert.match(sc, /^__Host-sbpb_session=/); for (const a of ['HttpOnly', 'Secure', 'SameSite=Strict', 'Path=/']) assert.ok(sc.includes(a), a);
-  assert.doesNotMatch(sc, /Domain=/i);
+test('start: redirect to Google with state, nonce and an S256 PKCE challenge; secrets sealed in a Lax HttpOnly cookie', async () => {
+  const res = await googleStart(get('/api/auth/google/start'), { env: ENV });
+  assert.equal(res.status, 302);
+  const u = new URL(res.headers.get('location'));
+  assert.equal(u.origin + u.pathname, S.GOOGLE_ENDPOINTS.authUrl);
+  assert.equal(u.searchParams.get('client_id'), CLIENT_ID);
+  assert.equal(u.searchParams.get('redirect_uri'), ORIGIN + '/api/auth/google/callback');
+  assert.equal(u.searchParams.get('response_type'), 'code');
+  assert.equal(u.searchParams.get('scope'), 'openid email');
+  assert.equal(u.searchParams.get('code_challenge_method'), 'S256');
+  for (const k of ['state', 'nonce', 'code_challenge']) assert.ok((u.searchParams.get(k) || '').length >= 40, k);
+  const sc = setCookies(res).find(c => c.startsWith(S.OAUTH_COOKIE + '='));
+  for (const a of ['HttpOnly', 'Secure', 'SameSite=Lax', 'Path=/', 'Max-Age=600']) assert.ok(sc.includes(a), a);
+  const raw = Buffer.from(sc.split(';')[0].split('=')[1], 'base64url').toString('latin1');
+  assert.ok(!raw.includes(u.searchParams.get('state')) && !raw.includes('verifier'), 'state cookie is encrypted, not just signed');
   assert.match(res.headers.get('cache-control'), /no-store/);
-  const text = JSON.stringify(body);
-  assert.ok(!text.includes(EDIT_PW) && !text.includes(ENV.SESSION_SECRET) && !text.includes(EDIT_HASH));
-  const v = await login(ENV, store, VIEW_PW); assert.equal(v.body.role, 'viewer');
+  // an origin that is not configured never gets a redirect URI
+  const other = await googleStart(new Request('https://evil.example/api/auth/google/start'), { env: ENV });
+  assert.match(other.headers.get('location'), /^\/\?signin=unavailable/);
+  assert.equal((await googleStart(new Request(ORIGIN + '/api/auth/google/start', { method: 'POST' }), { env: ENV })).status, 405);
 });
 
-test('session restore: GET returns the role and CSRF token; anonymous GET says signed out', async () => {
-  const store = S.memoryStore();
-  const { cookie, body } = await login(ENV, store, VIEW_PW);
-  const r = await (await sessionHandler(req('GET', { cookie }), { env: ENV, store })).json();
-  assert.deepEqual([r.authenticated, r.role, r.csrf], [true, 'viewer', body.csrf]);
-  const anon = await (await sessionHandler(req('GET'), { env: ENV, store })).json();
-  assert.equal(anon.authenticated, false);
+test('callback: an editor on the list gets an editor session (Secure, HttpOnly, SameSite=Strict __Host- cookie)', async () => {
+  const G = makeGoogle();
+  const { res, location, sessionCookie } = await signIn(G, 'editor@example.com');
+  assert.equal(res.status, 302); assert.equal(location, '/');
+  const sc = setCookies(res).find(c => c.startsWith(S.COOKIE + '='));
+  for (const a of ['HttpOnly', 'Secure', 'SameSite=Strict', 'Path=/']) assert.ok(sc.includes(a), a);
+  assert.doesNotMatch(sc, /Domain=/i);
+  assert.ok(setCookies(res).some(c => c.startsWith(S.OAUTH_COOKIE + '=;') && /Max-Age=0/.test(c)), 'state cookie cleared');
+  const st = await status(sessionCookie);
+  assert.deepEqual([st.authenticated, st.role, st.email], [true, 'editor', 'editor@example.com']);
+  assert.ok(st.csrf && st.expiresAt);
+  assert.ok(G.calls.includes(S.GOOGLE_ENDPOINTS.tokenUrl) && G.calls.includes(S.GOOGLE_ENDPOINTS.jwksUrl), 'code exchanged and signature checked against Google keys');
 });
 
-test('wrong password, bad origin, non-JSON and malformed bodies are refused', async () => {
-  const store = S.memoryStore();
-  assert.equal((await login(ENV, store, 'nope-nope-nope')).res.status, 401);
-  assert.equal((await sessionHandler(req('POST', { body: { password: VIEW_PW }, origin: 'https://evil.example' }), { env: ENV, store })).status, 403);
-  assert.equal((await sessionHandler(req('POST', { body: { password: VIEW_PW }, origin: null }), { env: ENV, store })).status, 403);
-  assert.equal((await sessionHandler(req('POST', { body: 'password=' + VIEW_PW, ctype: 'application/x-www-form-urlencoded' }), { env: ENV, store })).status, 415);
-  assert.equal((await sessionHandler(req('POST', { body: '{bad' }), { env: ENV, store, fetchImpl: sharedFetch })).status, 401);
-  assert.equal((await sessionHandler(req('PUT', { body: {} }), { env: ENV, store })).status, 405);
+test('callback: allowed viewers get viewer sessions; emails match case-insensitively', async () => {
+  const G = makeGoogle();
+  const a = await signIn(G, 'viewer@example.com');
+  assert.equal((await status(a.sessionCookie)).role, 'viewer');
+  const b = await signIn(G, 'VIEWER2@example.COM');
+  assert.deepEqual([(await status(b.sessionCookie)).role, (await status(b.sessionCookie)).email], ['viewer', 'viewer2@example.com']);
 });
 
-test('expired, forged, tampered and other-generation tokens are rejected', async () => {
+test('callback: an account that is not on the list gets no session (?signin=denied)', async () => {
+  const G = makeGoogle();
+  const r = await signIn(G, 'outsider@example.com');
+  assert.equal(r.location, '/?signin=denied'); assert.equal(r.sessionCookie, null);
+});
+
+test('callback refuses: cancelled, missing/forged/expired state cookie, state mismatch, code replay', async () => {
+  const G = makeGoogle();
+  const cancel = await googleCallback(get('/api/auth/google/callback?error=access_denied&state=x'), { env: ENV, fetchImpl: G.fetch });
+  assert.equal(cancel.headers.get('location'), '/?signin=cancelled');
+  assert.equal((await signIn(G, 'editor@example.com', { tamper: (t) => ({ ...t, cookie: null }) })).location, '/?signin=expired');
+  assert.equal((await signIn(G, 'editor@example.com', { tamper: (t) => ({ ...t, cookie: t.cookie.slice(0, -4) + 'AAAA' }) })).location, '/?signin=expired');
+  assert.equal((await signIn(G, 'editor@example.com', { tamper: (t) => ({ ...t, q: `?code=${t.code}&state=${t.state}x` }) })).location, '/?signin=failed');
+  // a state cookie older than 10 minutes
+  const start = await googleStart(get('/api/auth/google/start'), { env: ENV, now: Date.now() - 601e3 });
+  const { code, state } = G.approve(start.headers.get('location'), 'editor@example.com');
+  const old = await googleCallback(get(`/api/auth/google/callback?code=${code}&state=${state}`, { cookie: cookieValue(setCookies(start), S.OAUTH_COOKIE) }), { env: ENV, fetchImpl: G.fetch });
+  assert.equal(old.headers.get('location'), '/?signin=expired');
+  // the same code cannot be used twice (Google refuses; so do we)
+  const st2 = await googleStart(get('/api/auth/google/start'), { env: ENV });
+  const ok = G.approve(st2.headers.get('location'), 'editor@example.com');
+  const ck = cookieValue(setCookies(st2), S.OAUTH_COOKIE);
+  const first = await googleCallback(get(`/api/auth/google/callback?code=${ok.code}&state=${ok.state}`, { cookie: ck }), { env: ENV, fetchImpl: G.fetch });
+  const again = await googleCallback(get(`/api/auth/google/callback?code=${ok.code}&state=${ok.state}`, { cookie: ck }), { env: ENV, fetchImpl: G.fetch });
+  assert.equal(first.headers.get('location'), '/'); assert.equal(again.headers.get('location'), '/?signin=failed');
+});
+
+test('ID token checks: forged signature, wrong audience, issuer, expiry, nonce or unverified email are all refused', async () => {
+  const cases = {
+    'signed by another key': { token: (c) => G.sign(c, G.rogueKey) },
+    'unknown key id': { token: (c) => G.sign(c, undefined, 'nope') },
+    'wrong audience': { claims: { aud: 'someone-else.apps.googleusercontent.com' } },
+    'wrong issuer': { claims: { iss: 'https://evil.example' } },
+    expired: { claims: { exp: Math.floor(Date.now() / 1000) - 10 } },
+    'nonce mismatch': { claims: { nonce: 'other' } },
+    'email not verified': { claims: { email_verified: false } },
+    'alg none': { token: (c) => Buffer.from('{"alg":"none","kid":"x"}').toString('base64url') + '.' + Buffer.from(JSON.stringify(c)).toString('base64url') + '.' }
+  };
+  let G;
+  for (const [name, o] of Object.entries(cases)) {
+    _resetJwksCache();
+    G = makeGoogle(); G.overrides = o;
+    const r = await signIn(G, 'editor@example.com');
+    assert.equal(r.location, '/?signin=failed', name); assert.equal(r.sessionCookie, null, name);
+  }
+  _resetJwksCache();
+  await assert.rejects(() => verifyIdToken(S.loadAuthConfig(ENV), 'a.b', 'n'), /format/);
+});
+
+test('the allow-list is checked on every request: removal ends access, editor rights follow the editor list', async () => {
+  const G = makeGoogle();
+  const ed = await signIn(G, 'editor@example.com');
+  const demoted = { ...ENV, GOOGLE_EDITOR_EMAILS: '', GOOGLE_ALLOWED_EMAILS: ENV.GOOGLE_ALLOWED_EMAILS + ',editor@example.com' };
+  assert.equal((await status(ed.sessionCookie, demoted)).role, 'viewer', 'moved off the editor list -> viewer at once');
+  const removed = { ...ENV, GOOGLE_EDITOR_EMAILS: '', GOOGLE_ALLOWED_EMAILS: 'viewer@example.com' };
+  assert.equal((await status(ed.sessionCookie, removed)).authenticated, false, 'removed from the list -> signed out');
+});
+
+test('session restore and anonymous status; POST /api/session (old password sign-in) no longer exists', async () => {
+  assert.equal((await status(null)).authenticated, false);
+  const r = await sessionHandler(new Request(ORIGIN + '/api/session', { method: 'POST', headers: { origin: ORIGIN, 'content-type': 'application/json' }, body: '{"password":"x"}' }), { env: ENV, store: S.memoryStore() });
+  assert.equal(r.status, 405); assert.equal((await r.json()).error, 'use_google_sign_in');
+});
+
+test('expired, forged, tampered and other-generation session tokens are rejected', () => {
   const cfg = S.loadAuthConfig(ENV);
   const now = Date.now();
-  const { token } = S.signSession(cfg, { role: 'viewer', now });
+  const { token } = S.signSession(cfg, { role: 'viewer', email: 'viewer@example.com', now });
   assert.ok(S.verifySessionToken(cfg, token, now));
   assert.equal(S.verifySessionToken(cfg, token, now + cfg.ttlSec * 1000 + 1000), null, 'expired');
   const [b, sig] = token.split('.');
-  const p = JSON.parse(Buffer.from(b, 'base64url')); p.role = 'editor';
+  const p = JSON.parse(Buffer.from(b, 'base64url')); p.role = 'editor'; p.email = 'editor@example.com';
   assert.equal(S.verifySessionToken(cfg, Buffer.from(JSON.stringify(p)).toString('base64url') + '.' + sig, now), null, 'tampered');
-  const other = S.loadAuthConfig({ ...ENV, SESSION_SECRET: 'y'.repeat(40) });
-  assert.equal(S.verifySessionToken(other, token, now), null, 'other secret');
-  const gen2 = S.loadAuthConfig({ ...ENV, SESSION_GENERATION: '2' });
-  assert.equal(S.verifySessionToken(gen2, token, now), null, 'generation bump ends every session');
-  const long = S.signSession(S.loadAuthConfig({ ...ENV, SESSION_TTL_HOURS: '24' }), { role: 'viewer', now }).token;
+  assert.equal(S.verifySessionToken(S.loadAuthConfig({ ...ENV, SESSION_SECRET: 'y'.repeat(40) }), token, now), null, 'other secret');
+  assert.equal(S.verifySessionToken(S.loadAuthConfig({ ...ENV, SESSION_GENERATION: '2' }), token, now), null, 'generation bump ends every session');
+  const long = S.signSession(S.loadAuthConfig({ ...ENV, SESSION_TTL_HOURS: '24' }), { role: 'viewer', email: 'viewer@example.com', now }).token;
   assert.equal(S.verifySessionToken(cfg, long, now), null, 'lifetime longer than configured');
+  // the OAuth state value can never be used as a session and vice versa
+  const sealed = S.signValue(cfg, 'oauth', { exp: Math.floor(now / 1000) + 60 });
+  assert.equal(S.verifySessionToken(cfg, sealed, now), null);
+  assert.equal(S.verifyValue(cfg, 'oauth', token, now), null);
   for (const t of ['', 'a', 'a.b.c', '.', 'x'.repeat(2000)]) assert.equal(S.verifySessionToken(cfg, t, now), null);
 });
 
 test('logout needs CSRF + origin, revokes the session server-side and clears the cookie', async () => {
-  const store = S.memoryStore();
-  const { cookie, body } = await login(ENV, store, EDIT_PW);
-  assert.equal((await sessionHandler(req('DELETE', { cookie }), { env: ENV, store })).status, 403, 'no CSRF');
-  assert.equal((await sessionHandler(req('DELETE', { cookie, csrf: body.csrf, origin: 'https://evil.example' }), { env: ENV, store })).status, 403);
-  const out = await sessionHandler(req('DELETE', { cookie, csrf: body.csrf }), { env: ENV, store });
+  const G = makeGoogle(); const store = S.memoryStore();
+  const { sessionCookie } = await signIn(G, 'editor@example.com');
+  const csrf = (await status(sessionCookie, ENV, store)).csrf;
+  const del = (h) => sessionHandler(new Request(ORIGIN + '/api/session', { method: 'DELETE', headers: { cookie: sessionCookie, origin: ORIGIN, ...h } }), { env: ENV, store });
+  assert.equal((await del({})).status, 403, 'no CSRF');
+  assert.equal((await del({ 'x-sb-csrf': csrf, origin: 'https://evil.example' })).status, 403);
+  const out = await del({ 'x-sb-csrf': csrf });
   assert.equal(out.status, 200); assert.match(out.headers.get('set-cookie'), /Max-Age=0/);
-  const after = await (await sessionHandler(req('GET', { cookie }), { env: ENV, store })).json();
-  assert.equal(after.authenticated, false, 'a copied cookie stops working after logout');
+  assert.equal((await status(sessionCookie, ENV, store)).authenticated, false, 'a copied cookie stops working after logout');
 });
 
 test('logout whose revocation cannot be stored is NOT reported as success (the function answers 500)', async () => {
-  const store = S.memoryStore();
-  const { cookie, body } = await login(ENV, store, EDIT_PW);
+  const G = makeGoogle(); const store = S.memoryStore();
+  const { sessionCookie } = await signIn(G, 'editor@example.com');
+  const csrf = (await status(sessionCookie, ENV, store)).csrf;
   const broken = { ...store, async set() { throw new Error('blobs down'); } };
-  await assert.rejects(() => sessionHandler(req('DELETE', { cookie, csrf: body.csrf }), { env: ENV, store: broken }));
-  const still = await (await sessionHandler(req('GET', { cookie }), { env: ENV, store })).json();
-  assert.equal(still.authenticated, true, 'the session is honestly still valid; the client must retry');
+  await assert.rejects(() => sessionHandler(new Request(ORIGIN + '/api/session', { method: 'DELETE', headers: { cookie: sessionCookie, origin: ORIGIN, 'x-sb-csrf': csrf } }), { env: ENV, store: broken }));
+  assert.equal((await status(sessionCookie, ENV, store)).authenticated, true, 'honestly still valid; the client must retry');
 });
 
 test('CSRF token is bound to the session; authorize enforces role, origin and token', async () => {
-  const cfg = S.loadAuthConfig(ENV);
-  const store = S.memoryStore();
-  const a = S.signSession(cfg, { role: 'viewer' }), b = S.signSession(cfg, { role: 'editor' });
+  const cfg = S.loadAuthConfig(ENV); const store = S.memoryStore();
+  const a = S.signSession(cfg, { role: 'viewer', email: 'viewer@example.com' }), b = S.signSession(cfg, { role: 'editor', email: 'editor@example.com' });
   const mk = (tok, extra = {}) => new Request(ORIGIN + '/api/v1/x', { method: 'PUT', headers: { cookie: S.COOKIE + '=' + tok, origin: ORIGIN, ...extra } });
   assert.equal((await S.authorize(mk(b.token, { 'x-sb-csrf': S.csrfToken(cfg, a.payload.sid) }), cfg, store, { write: true, role: 'editor' })).error, 'bad_csrf');
   assert.equal((await S.authorize(mk(a.token, { 'x-sb-csrf': S.csrfToken(cfg, a.payload.sid) }), cfg, store, { write: true, role: 'editor' })).status, 403, 'viewer cannot write');
   assert.ok((await S.authorize(mk(b.token, { 'x-sb-csrf': S.csrfToken(cfg, b.payload.sid) }), cfg, store, { write: true, role: 'editor' })).ok);
 });
 
-test('sign-in limits: per client, then globally; success clears the client count; no raw address stored', async () => {
-  const env = { ...ENV, LOGIN_MAX_FAILURES_PER_CLIENT: '3', LOGIN_MAX_FAILURES_GLOBAL: '6', LOGIN_WINDOW_MINUTES: '15' };
-  const fetchImpl = workerFetch(); const store = S.memoryStore(); const now = Date.now();
-  const L = (pw, ip, t = now) => login(env, store, pw, { ip, now: t, fetchImpl });
-  for (let i = 0; i < 3; i++) assert.equal((await L('wrong-wrong-wrong', '203.0.113.9')).res.status, 401);
-  const blocked = await L(VIEW_PW, '203.0.113.9');
-  assert.equal(blocked.res.status, 429, 'even the right password waits');
-  assert.ok(Number(blocked.res.headers.get('retry-after')) > 0);
-  const rows = fetchImpl.env.DB._raw.prepare('SELECT bucket FROM auth_attempts').all().map(r => r.bucket);
-  assert.ok(rows.every(b => !b.includes('203.0.113.9')), 'buckets are HMACs');
-  assert.equal((await L(VIEW_PW, '198.51.100.7')).res.status, 200, 'another client still signs in');
-  const g = () => fetchImpl.env.DB._raw.prepare("SELECT n FROM auth_attempts WHERE bucket='global'").get().n;
-  assert.equal(g(), 4, 'the successful sign-in gave its global slot back');
+// ---- durable, concurrency-safe sign-in limits (counted before checking) ----
+test('sign-in limits: refused accounts are counted per client; a successful sign-in clears its count', async () => {
+  const env = { ...ENV, LOGIN_MAX_FAILURES_PER_CLIENT: '3', LOGIN_MAX_FAILURES_GLOBAL: '50' };
+  const G = makeGoogle();
+  for (let i = 0; i < 3; i++) assert.equal((await signIn(G, 'outsider@example.com', { env, ip: '203.0.113.9' })).location, '/?signin=denied');
+  assert.equal((await signIn(G, 'editor@example.com', { env, ip: '203.0.113.9' })).location, '/?signin=too_many', 'even an allowed account waits');
+  const rows = G.wenv.DB._raw.prepare('SELECT bucket FROM auth_attempts').all().map(r => r.bucket);
+  assert.ok(rows.every(b => !b.includes('203.0.113.9')), 'buckets are HMACs, no raw address');
+  assert.equal((await signIn(G, 'editor@example.com', { env, ip: '198.51.100.7' })).location, '/', 'another client still signs in');
   const realNow = Date.now; Date.now = () => realNow() + 16 * 60000;   // the Worker keeps its own clock
-  try { assert.equal((await L(VIEW_PW, '203.0.113.9', now + 16 * 60000)).res.status, 200, 'the window passes'); }
+  try { assert.equal((await signIn(G, 'editor@example.com', { env, ip: '203.0.113.9' })).location, '/', 'the window passes'); }
   finally { Date.now = realNow; }
 });
 
-test('CONCURRENT: 40 simultaneous wrong passwords from one client -> exactly the limit get a password check', async () => {
+test('CONCURRENT: 40 simultaneous refused sign-ins from one client -> exactly the limit are checked', async () => {
   const env = { ...ENV, LOGIN_MAX_FAILURES_PER_CLIENT: '5', LOGIN_MAX_FAILURES_GLOBAL: '1000' };
-  const fetchImpl = workerFetch({ delay: 20 }); const store = S.memoryStore();
-  const res = await Promise.all(Array.from({ length: 40 }, () => login(env, store, 'wrong-wrong-wrong', { ip: '203.0.113.50', fetchImpl })));
-  const by = (s) => res.filter(r => r.res.status === s).length;
-  assert.equal(by(401), 5); assert.equal(by(429), 35);
-  const db = fetchImpl.env.DB._raw;
-  assert.equal(db.prepare("SELECT n FROM auth_attempts WHERE bucket='global'").get().n, 40, 'every attempt counted');
-  assert.equal(db.prepare("SELECT n FROM auth_attempts WHERE bucket LIKE 'client:%'").get().n, 40);
+  const G = makeGoogle({ delay: 20 });
+  const res = await Promise.all(Array.from({ length: 40 }, () => signIn(G, 'outsider@example.com', { env, ip: '203.0.113.50' })));
+  assert.equal(res.filter(r => r.location === '/?signin=denied').length, 5);
+  assert.equal(res.filter(r => r.location === '/?signin=too_many').length, 35);
+  assert.equal(G.wenv.DB._raw.prepare("SELECT n FROM auth_attempts WHERE bucket='global'").get().n, 40, 'every attempt counted');
+  assert.equal(G.calls.filter(u => u === S.GOOGLE_ENDPOINTS.tokenUrl).length, 5, 'only 5 code exchanges with Google');
 });
 
 test('CONCURRENT: 40 simultaneous attempts from 40 clients -> the global limit holds', async () => {
   const env = { ...ENV, LOGIN_MAX_FAILURES_PER_CLIENT: '5', LOGIN_MAX_FAILURES_GLOBAL: '10' };
-  const fetchImpl = workerFetch({ delay: 20 }); const store = S.memoryStore();
-  const res = await Promise.all(Array.from({ length: 40 }, (_, i) => login(env, store, 'wrong-wrong-wrong', { ip: '192.0.2.' + i, fetchImpl })));
-  assert.equal(res.filter(r => r.res.status === 401).length, 10);
-  assert.equal(res.filter(r => r.res.status === 429).length, 30);
-  // and a correct password is refused too while the global window is full
-  assert.equal((await login(env, store, VIEW_PW, { ip: '192.0.2.250', fetchImpl })).res.status, 429);
+  const G = makeGoogle({ delay: 20 });
+  const res = await Promise.all(Array.from({ length: 40 }, (_, i) => signIn(G, 'outsider@example.com', { env, ip: '192.0.2.' + i })));
+  assert.equal(res.filter(r => r.location === '/?signin=denied').length, 10);
+  assert.equal(res.filter(r => r.location === '/?signin=too_many').length, 30);
 });
 
-test('CONCURRENT: a burst of correct sign-ins does not exhaust the global limit', async () => {
+test('CONCURRENT: a burst of allowed sign-ins does not use up the global limit', async () => {
   const env = { ...ENV, LOGIN_MAX_FAILURES_GLOBAL: '10' };
-  const fetchImpl = workerFetch({ delay: 20 }); const store = S.memoryStore();
-  const res = await Promise.all(Array.from({ length: 8 }, (_, i) => login(env, store, VIEW_PW, { ip: '198.18.0.' + i, fetchImpl })));
-  assert.ok(res.every(r => r.res.status === 200));
-  assert.equal(fetchImpl.env.DB._raw.prepare("SELECT n FROM auth_attempts WHERE bucket='global'").get().n, 0);
+  const G = makeGoogle({ delay: 20 });
+  const res = await Promise.all(Array.from({ length: 8 }, (_, i) => signIn(G, 'viewer@example.com', { env, ip: '198.18.0.' + i })));
+  assert.ok(res.every(r => r.location === '/'));
+  assert.equal(G.wenv.DB._raw.prepare("SELECT n FROM auth_attempts WHERE bucket='global'").get().n, 0);
 });
 
 test('sign-in fails closed when the attempt counter is missing or unreachable', async () => {
-  const store = S.memoryStore();
-  assert.equal((await login({ ...ENV, WORKER_AUTH_SECRET: '' }, store, VIEW_PW)).res.status, 503);
-  assert.equal((await login(ENV, store, VIEW_PW, { fetchImpl: async () => { throw new Error('down'); } })).res.status, 503);
-  assert.equal((await login(ENV, store, VIEW_PW, { fetchImpl: async () => new Response('{"ok":false}', { status: 403 }) })).res.status, 503);
-  assert.equal((await login(ENV, store, VIEW_PW, { fetchImpl: async () => new Response('{"ok":true}', { status: 200 }) })).res.status, 503, 'malformed counter reply');
+  const G = makeGoogle();
+  assert.equal((await signIn(G, 'editor@example.com', { env: { ...ENV, WORKER_AUTH_SECRET: '' } })).location, '/?signin=unavailable');
+  const down = makeGoogle(); const f = down.fetch;
+  down.fetch = (u, i) => String(u).startsWith('https://worker.example') ? Promise.reject(new Error('down')) : f(u, i);
+  assert.equal((await signIn(down, 'editor@example.com')).location, '/?signin=unavailable');
 });
 
 test('the attempt routes accept only the auth key and validated input', async () => {
