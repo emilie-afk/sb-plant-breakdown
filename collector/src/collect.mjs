@@ -57,6 +57,11 @@ export async function main() {
   const only = arg('only');
   if (only && !['shopify', 'market'].includes(only)) { console.error('--only must be shopify or market.'); return EXIT.CONFIG; }
   const wantMarket = only !== 'shopify' && !!(cfg.shipstation && cfg.shipstation.enabled !== false);
+  if (wantMarket && !(Array.isArray(cfg.shipstation.storeGroups) && cfg.shipstation.storeGroups.length)) {
+    // Store grouping used to be built in; it now lives in config.local.json. Without it,
+    // new market reports name each ShipStation store separately (stored reports are unchanged).
+    console.warn('Note: shipstation.storeGroups is not set in the config; market stores are not grouped (see README, Market data).');
+  }
   if (only === 'market' && !wantMarket) { console.error('--only market needs a "shipstation" section in the config.'); return EXIT.CONFIG; }
   const wantBackfill = scheduled && !flag('no-backfill') && !flag('dry-run') && cfg.periods && cfg.periods.backfill;
   if (!periods.length && !wantBackfill) { log('Nothing to collect today.'); return EXIT.OK; }
@@ -222,6 +227,7 @@ export async function main() {
             text = out.text; rec.download = { via: 'browser', bytes: Buffer.byteLength(text), shownRange: out.shownRange };
           }
           const v = validateMarketExport(text, period, { timeZone: cfg.timeZone, currency: cfg.currency, client: os.hostname(),
+                                                         storeGroups: (cfg.shipstation && cfg.shipstation.storeGroups) || [],
                                                          collectedAt: new Date().toISOString() });
           if (!v.ok && v.empty) {
             rec.status = 'no_market_sales';

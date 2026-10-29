@@ -3,8 +3,10 @@
 //   node tools/acceptance-live.mjs https://<site>.netlify.app [outDir]
 //
 // Opens the site in a FRESH Chrome profile (no saved data, no key), in a
-// visible window. A PERSON types the site password into the real StatiCrypt
-// screen; this script never handles that password or any Worker key. Then it
+// visible window. A PERSON types the dashboard password into the sign-in form
+// (checked by the server); this script never handles that password or any
+// Worker key. It also checks that no data is shown and no API answers before
+// sign-in, and that the session is HttpOnly and not readable by the page. Then it
 // checks, without uploading anything:
 //   - the latest saved Shopify report loads by itself; no file input is shown
 //   - report history lists revisions; a CSV download matches the stored row count
@@ -41,27 +43,50 @@ const pass = (name, ok, detail) => { R.checks[name] = { ok: !!ok, detail }; cons
 const text = async (sel) => (await page.locator(sel).innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
 const shot = (n) => page.screenshot({ path: path.join(outDir, n + '.png') });
 
+function parseCsvText(text) {
+  text = text.replace(/^\uFEFF/, '');
+  const rows = []; let row = [], f = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === '"') { if (text[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += c; continue; }
+    if (c === '"') { q = true; continue; }
+    if (c === ',') { row.push(f); f = ''; continue; }
+    if (c === '\r') continue;
+    if (c === '\n') { row.push(f); rows.push(row); row = []; f = ''; continue; }
+    f += c;
+  }
+  if (f !== '' || row.length) { row.push(f); rows.push(row); }
+  return rows;
+}
+
 async function waitUnlocked(label) {
   console.log(`[${label}] If the site password screen is showing, type the password in the Chrome window (up to 10 minutes)...`);
   // Local test build only: its throwaway test password comes from the test harness.
-  if (localTest && process.env.LOCAL_TEST_SITEPW && await page.locator('input[type=password]').count()) {
-    await page.fill('input[type=password]', process.env.LOCAL_TEST_SITEPW); await page.keyboard.press('Enter');
+  if (localTest && process.env.LOCAL_TEST_SITEPW && await page.isVisible('#sb-login')) {
+    await page.fill('#sb-login-password', process.env.LOCAL_TEST_SITEPW); await page.click('#sb-login-submit');
   }
-  await page.waitForSelector('#sb-data-status', { timeout: 600000 });
+  await page.waitForSelector('#sb-login', { state: 'hidden', timeout: 600000 });
+  await page.waitForSelector('#sb-data-status', { timeout: 60000 });
   await page.waitForFunction(() => /Sales period|No saved Shopify report|not connected/.test(document.querySelector('#sb-data-status')?.innerText || ''), null, { timeout: 60000 });
   await page.waitForTimeout(2000);
 }
 
 try {
-  await page.goto(site + (localTest ? '/dist/index.html' : '/'));
-  const pw = await page.locator('input[type=password]').count();
-  const appBefore = await page.evaluate(() => typeof window.periodPlan === 'function');
-  pass('site password screen shown first; app code not readable before unlocking', pw > 0 && !appBefore, { passwordFields: pw });
+  await page.goto(site + '/');
+  await page.waitForTimeout(2000);
+  const shown = await page.isVisible('#sb-login');
+  const apiBefore = await page.evaluate(async () => (await fetch('/api/v1/reports', { cache: 'no-store' })).status);
+  const keyMeta = await page.evaluate(() => !!document.querySelector('meta[name^="sb-shared"], meta[name="sb-mcg-password"]'));
+  pass('sign-in shown first; API refuses without a session; no key in the page', shown && apiBefore === 401 && !keyMeta, { apiBefore, keyMeta });
   await waitUnlocked('first visit');
 
   const ls = await page.evaluate(() => { try { return JSON.parse(localStorage.getItem('sb-shared-store-v1') || 'null'); } catch (e) { return 'error'; } });
   const status1 = await text('#sb-data-status');
   pass('connected without entering a Worker key', ls === null && !/not connected/i.test(status1), { savedKeyInBrowser: ls !== null });
+  const sc = (await ctx.cookies()).find(c => c.name === '__Host-sbpb_session');
+  pass('session cookie is HttpOnly, Secure, SameSite=Strict and hidden from the page',
+       !!sc && sc.httpOnly && sc.secure && sc.sameSite === 'Strict' && !(await page.evaluate(() => document.cookie)).includes('sbpb'),
+       { present: !!sc });
   pass('latest saved report loads without a file upload', /Sales period:/.test(status1) && (await page.locator('input[type=file]:visible').count()) === 0,
        { status: status1.slice(0, 260) });
   pass('no Data & imports tab in the navigation', (await page.locator('[data-tab="data"]').count()) === 0);
@@ -71,14 +96,19 @@ try {
   pass('a running or incomplete period is labelled partial', !/month to date/.test(status1) || /partial/.test(status1));
   if (!/Sales period:/.test(status1)) throw new Error('No saved report is on screen (is the built-in read-only connection in this deploy?); the remaining checks need one.');
   // All product types: the default scope covers every product type in the report.
+  // The filter lists CANONICAL product types (several raw Shopify spellings map
+  // to one), so every included product's canonical type must be selectable.
   const types = await page.evaluate(() => {
     const snap = snapshots.find(s => s.id === state.shopify.snapshotId);
-    const inReport = new Set(snap.products.map(p => p.ptype));
     const opts = [...document.querySelectorAll('#sb-ptype option')].map(o => o.value).filter(v => v !== 'All');
-    return { selected: document.querySelector('#sb-ptype').value, inReport: inReport.size, inFilter: opts.length,
-             groupScope: document.querySelector('#sb-plantscope').value };
+    const split = window.splitExclusions(snap.products, (snap.meta && snap.meta.exclusionRules) || window.DEFAULT_EXCLUSIONS);
+    const included = split.included;
+    const canon = [...new Set(included.map(p => p.ptypeLabel != null ? p.ptypeLabel : p.ptype))];
+    return { selected: document.querySelector('#sb-ptype').value, groupScope: document.querySelector('#sb-plantscope').value,
+             rawTypes: new Set(snap.products.map(p => p.ptype)).size, canonicalTypes: canon.length, inFilter: opts.length,
+             notSelectable: canon.filter(c => c && opts.indexOf(c) < 0) };
   });
-  pass('Shopify analysis covers all product types by default', types.selected === 'All' && types.groupScope === 'all' && types.inFilter >= types.inReport - 1, types);
+  pass('Shopify analysis covers all product types by default', types.selected === 'All' && types.groupScope === 'all' && types.notSelectable.length === 0, types);
   await page.click('[data-tab="vendors"]'); await page.waitForTimeout(2500);
   const vend = await page.evaluate(() => ({ ptype: document.querySelector('#vn-ptype').value, scope: document.querySelector('#vn-plantscope').value,
                                            cards: (document.querySelector('#vn-cards')?.innerText || '').replace(/\s+/g, ' ').slice(0, 200) }));
@@ -121,17 +151,20 @@ try {
   const sources = await text('#ds-sources');
   const advOpen = await page.evaluate(() => document.getElementById('ds-advanced').open);
   const conn = await page.evaluate(() => (document.getElementById('ds-connection')?.textContent || '').replace(/\s+/g, ' '));
-  pass('Data settings opens: Shopify connected, technical details folded away, built-in read-only connection',
+  pass('Data settings opens: Shopify connected, technical details folded away, signed-in session shown (no key field)',
        await page.locator('#data-settings-modal').isVisible() && /Shopify connected · Updates automatically/.test(sources) && !advOpen &&
-       /read-only connection built into/.test(conn), { sources: sources.slice(0, 200), advancedOpen: advOpen });
+       /Signed in as (viewer|editor)/.test(conn) && (await page.locator('#di-key, #di-url').count()) === 0, { sources: sources.slice(0, 200), advancedOpen: advOpen });
   const rows = await page.locator('#ds-history-panel tbody tr').count();
   pass('report history lists stored revisions', rows > 0, { revisions: rows, superseded: (await text('#ds-history-panel')).includes('superseded') });
   const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('#ds-history-panel [data-hist-dl]').first().click()]);
   const file = path.join(outDir, dl.suggestedFilename());
   await dl.saveAs(file);
-  const lines = fs.readFileSync(file, 'utf8').replace(/^﻿/, '').split(/\r?\n/).filter(Boolean);
-  const hdr = lines.findIndex(l => l.startsWith('product_id,'));
-  const dataRows = hdr >= 0 ? lines.length - hdr - 1 : -1;
+  // Parsed as CSV (RFC 4180): a quoted field may contain a line break, so
+  // counting text lines would miscount.
+  const recs = parseCsvText(fs.readFileSync(file, 'utf8')).filter(r => r.join('') !== '');
+  const lines = recs.map(r => r.join(','));
+  const hdr = recs.findIndex(r => r[0] === 'product_id');
+  const dataRows = hdr >= 0 ? recs.length - hdr - 1 : -1;
   const expect = await page.evaluate(() => { const h = (window.SBDataImports.history || []).filter(r => r.source === 'shopify'); return h.length ? h[0].row_count : null; });
   pass('CSV download of a revision matches the stored row count', dataRows === expect, { file: dl.suggestedFilename(), dataRows, storedRows: expect,
        meta: lines.slice(0, 7) });

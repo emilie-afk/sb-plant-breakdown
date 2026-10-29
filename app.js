@@ -3,6 +3,10 @@
 // ============================================================
 const STORAGE_KEY = "sb-analyzer-snapshots-v1";
 const STORAGE_KEY_LZ = STORAGE_KEY + "-lz";
+// Workbook cells: figures stay NUMBERS (rounded), never "12.30" text.
+const num2 = (v, d = 2) => { const f = Math.pow(10, d); return Math.round((+v || 0) * f) / f; };
+// Text from imported or shared data is escaped before it enters HTML.
+const H = (v) => (typeof sbHtml === 'function' ? sbHtml(v) : String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])));
 let snapshots = loadSnapshots();
 // Re-run the genus classifier over stored snapshots so new categories
 // (e.g. Bundle, Subscription) propagate without requiring re-upload.
@@ -434,15 +438,15 @@ function promptForPeriod(source, filename, defaults){
     modal.style.display = 'flex';
     modal.innerHTML = `
       <div class="modal-box" style="max-width:480px">
-        <h2>Set the period for this ${source} file</h2>
-        <p class="small">The filename <code>${filename || ''}</code> doesn't include a date range, so please pick the period this file covers.</p>
+        <h2>Set the period for this ${H(source)} file</h2>
+        <p class="small">The filename <code>${H(filename || '')}</code> doesn't include a date range, so please pick the period this file covers.</p>
         <div style="margin:14px 0">
           <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px">Start date</label>
-          <input type="date" id="prompt-start" value="${defStart}" style="padding:8px;border:1px solid var(--border);border-radius:6px;font-size:14px;width:100%">
+          <input type="date" id="prompt-start" value="${H(defStart)}" style="padding:8px;border:1px solid var(--border);border-radius:6px;font-size:14px;width:100%">
         </div>
         <div style="margin:14px 0">
           <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px">End date</label>
-          <input type="date" id="prompt-end" value="${defEnd}" style="padding:8px;border:1px solid var(--border);border-radius:6px;font-size:14px;width:100%">
+          <input type="date" id="prompt-end" value="${H(defEnd)}" style="padding:8px;border:1px solid var(--border);border-radius:6px;font-size:14px;width:100%">
         </div>
         <div class="small" style="margin-top:8px">
           Quick presets:
@@ -620,15 +624,15 @@ function renderTab(source){
 function renderSnapshotPicker(source, snaps){
   const sel = document.getElementById(`${source}-snap-select`);
   sel.innerHTML = '<option value="">— Pick a snapshot —</option>' +
-    snaps.map(s => `<option value="${s.id}" ${s.id === state[source].snapshotId ? 'selected' : ''}>${s.label} (${s.products.length} SKUs)</option>`).join('');
+    snaps.map(s => `<option value="${H(s.id)}" ${s.id === state[source].snapshotId ? 'selected' : ''}>${H(s.label)} (${s.products.length} SKUs)</option>`).join('');
   const cmpSel = document.getElementById(`${source}-compare-select`);
   cmpSel.innerHTML = '<option value="">— None —</option>' +
-    snaps.filter(s => s.id !== state[source].snapshotId).map(s => `<option value="${s.id}" ${s.id === state[source].compareId ? 'selected' : ''}>${s.label}</option>`).join('');
+    snaps.filter(s => s.id !== state[source].snapshotId).map(s => `<option value="${H(s.id)}" ${s.id === state[source].compareId ? 'selected' : ''}>${H(s.label)}</option>`).join('');
 }
 
 function renderSingleView(source, snap){
   document.getElementById(`${source}-mode-banner`).innerHTML =
-    `<strong>${snap.label}</strong> · ${snap.products.length} SKUs · uploaded ${new Date(snap.uploadedAt).toLocaleDateString()}`;
+    `<strong>${H(snap.label)}</strong> · ${snap.products.length} SKUs · uploaded ${new Date(snap.uploadedAt).toLocaleDateString()}`;
   const genera = aggregateByGenus(snap.products);
   const totals = computeTotals(snap.products);
   renderCards(source, totals, false);
@@ -644,7 +648,7 @@ function renderCompareView(source, curSnap){
   const priSnap = snapshots.find(s => s.id === state[source].compareId);
   if (!priSnap) { state[source].mode = "single"; renderTab(source); return; }
   document.getElementById(`${source}-mode-banner`).innerHTML =
-    `Comparing <strong>${curSnap.label}</strong> vs <strong>${priSnap.label}</strong>`;
+    `Comparing <strong>${H(curSnap.label)}</strong> vs <strong>${H(priSnap.label)}</strong>`;
   const cmp = buildComparison(curSnap.products, priSnap.products);
   const cur = computeTotals(curSnap.products);
   const pri = computeTotals(priSnap.products);
@@ -760,16 +764,16 @@ function renderGenusTable(source, genera, isCompare){
   tbody.innerHTML = list.map(g => {
     let cells;
     if (isCompare){
-      cells = [g.genus, fmtN(g.skus), fmtN(g.ci), fmtN(g.pi), fmt$(g.ct), fmt$(g.pt),
+      cells = [H(g.genus), fmtN(g.skus), fmtN(g.ci), fmtN(g.pi), fmt$(g.ct), fmt$(g.pt),
         `<span class="${deltaClass(g.d)}">${g.d>=0?'+':'-'}${fmt$(Math.abs(g.d)).replace('$','$')}</span>`,
         `<span class="${deltaClass(g.d)}">${arrow(g.pct)} ${pctFmt(g.pct)}</span>`];
     } else if (isAmazon){
-      cells = [g.genus, fmtN(g.skus), fmtN(g.glance), fmtN(g.units), pctFmt(g.conv), fmt$(g.rev),
+      cells = [H(g.genus), fmtN(g.skus), fmtN(g.glance), fmtN(g.units), pctFmt(g.conv), fmt$(g.rev),
         (g.inv === 0 && g.units > 0 ? '<span class="badge alert">0</span>' : fmtN(g.inv))];
     } else {
-      cells = [g.genus, fmtN(g.skus), fmtN(g.units), fmt$(g.rev), fmt$(g.avgPrice)];
+      cells = [H(g.genus), fmtN(g.skus), fmtN(g.units), fmt$(g.rev), fmt$(g.avgPrice)];
     }
-    return `<tr class="clickable" data-genus="${g.genus.replace(/"/g,'&quot;')}">${
+    return `<tr class="clickable" data-genus="${H(g.genus)}">${
       cells.map((c,i)=>`<td class="${i===0?'':'num'}">${c}</td>`).join('')}</tr>`;
   }).join('');
   tbody.querySelectorAll('tr').forEach(tr =>
@@ -811,12 +815,12 @@ function renderDrill(source, genus, genera){
   if (isAmazon){
     cols = ['Rank','ASIN','Item','Glance','Conv','Units','Avg','Revenue'];
     const dKeys = [null, 'asin', 'title', 'glance', 'conv', 'units', 'avg', 'rev'];
-    render = (p,i) => [i+1, p.asin, p.title, fmtN(p.glance), pctFmt(p.conv), fmtN(p.units), fmt$(p.avg), fmt$(p.rev)];
+    render = (p,i) => [i+1, H(p.asin), H(p.title), fmtN(p.glance), pctFmt(p.conv), fmtN(p.units), fmt$(p.avg), fmt$(p.rev)];
     var __drillKeys = dKeys;
   } else {
     cols = ['Rank','Title','Units','Avg','Revenue'];
     const dKeys = [null, 'title', 'units', 'avg', 'rev'];
-    render = (p,i) => [i+1, p.title, fmtN(p.units), fmt$(p.avg), fmt$(p.rev)];
+    render = (p,i) => [i+1, H(p.title), fmtN(p.units), fmt$(p.avg), fmt$(p.rev)];
     var __drillKeys = dKeys;
   }
   if (!state.drillSort[source]) state.drillSort[source] = {col: cols.length - 1, dir: 'desc'};
@@ -890,7 +894,7 @@ function renderDrillCompare(source, genus, genera){
     tbody.innerHTML = `<tr><td colspan="${cols.length}" class="empty">No plants match this filter.</td></tr>`;
   } else {
     tbody.innerHTML = items.map((p,i) =>
-      `<tr><td>${i+1}</td><td>${p.t}</td><td class="num">${fmtN(p.ci)}</td><td class="num">${fmtN(p.pi)}</td><td class="num">${fmt$(p.ct)}</td><td class="num">${fmt$(p.pt)}</td><td class="num ${deltaClass(p.d)}">${p.d>=0?'+':'-'}${fmt$(Math.abs(p.d))}</td><td class="num ${deltaClass(p.d)}">${arrow(p.pct)} ${pctFmt(p.pct)}</td></tr>`).join('');
+      `<tr><td>${i+1}</td><td>${H(p.t)}</td><td class="num">${fmtN(p.ci)}</td><td class="num">${fmtN(p.pi)}</td><td class="num">${fmt$(p.ct)}</td><td class="num">${fmt$(p.pt)}</td><td class="num ${deltaClass(p.d)}">${p.d>=0?'+':'-'}${fmt$(Math.abs(p.d))}</td><td class="num ${deltaClass(p.d)}">${arrow(p.pct)} ${pctFmt(p.pct)}</td></tr>`).join('');
   }
   thead.querySelectorAll('[data-dsc]').forEach(th => th.addEventListener('click', () => {
     const col = +th.dataset.dsc;
@@ -924,7 +928,7 @@ function renderTopPlants(source, products, curSnap, priSnap){
   if (hdr) hdr.textContent = `High-revenue plants — ${label}${compareLabel}`;
 
   // Highlight the active threshold button
-  document.querySelectorAll(`#${source}-top-plants [data-threshold]`).forEach(b =>
+  document.querySelectorAll(`#${H(source)}-top-plants [data-threshold]`).forEach(b =>
     b.classList.toggle('active', +b.dataset.threshold === tp.threshold));
   document.getElementById(`${source}-tp-custom`).value = tp.threshold;
 
@@ -985,21 +989,21 @@ function renderTopPlants(source, products, curSnap, priSnap){
   } else {
     tbody.innerHTML = items.map(p => {
       const t = getType(p.genus);
-      const tBadge = t ? `<span class="badge ${t === 'Succulent' ? 'shopify' : (t === 'Air Plant' ? 'airplant' : 'amazon')}">${t}</span>` : '';
+      const tBadge = t ? `<span class="badge ${t === 'Succulent' ? 'shopify' : (t === 'Air Plant' ? 'airplant' : 'amazon')}">${H(t)}</span>` : '';
       let cells;
       if (isCompare){
         const dClass = p._delta > 0 ? 'up' : p._delta < 0 ? 'down' : 'flat';
         cells = isAmazon
-          ? [p.asin, p.title, p.genus, tBadge, fmtN(p.units), fmt$(p.rev), fmt$(p._priorRev),
+          ? [H(p.asin), H(p.title), H(p.genus), tBadge, fmtN(p.units), fmt$(p.rev), fmt$(p._priorRev),
              `<span class="${dClass}">${(p._delta>=0?'+':'-')}${fmt$(Math.abs(p._delta))}</span>`,
              `<span class="${dClass}">${arrow(p._deltaPct)} ${pctFmt(p._deltaPct)}</span>`]
-          : [p.title, p.genus, tBadge, fmtN(p.units), fmt$(p.rev), fmt$(p._priorRev),
+          : [H(p.title), H(p.genus), tBadge, fmtN(p.units), fmt$(p.rev), fmt$(p._priorRev),
              `<span class="${dClass}">${(p._delta>=0?'+':'-')}${fmt$(Math.abs(p._delta))}</span>`,
              `<span class="${dClass}">${arrow(p._deltaPct)} ${pctFmt(p._deltaPct)}</span>`];
       } else {
         cells = isAmazon
-          ? [p.asin, p.title, p.genus, tBadge, fmtN(p.glance), pctFmt(p.conv), fmtN(p.units), fmt$(p.avg), fmt$(p.rev)]
-          : [p.title, p.genus, tBadge, fmtN(p.units), fmt$(p.avg), fmt$(p.rev)];
+          ? [H(p.asin), H(p.title), H(p.genus), tBadge, fmtN(p.glance), pctFmt(p.conv), fmtN(p.units), fmt$(p.avg), fmt$(p.rev)]
+          : [H(p.title), H(p.genus), tBadge, fmtN(p.units), fmt$(p.avg), fmt$(p.rev)];
       }
       return `<tr>${cells.map((c,j) => {
         return `<td class="${isTextIdx(j)?'':'num'}">${c}</td>`;
@@ -1022,11 +1026,11 @@ function renderAlerts(source, products){
   if (tab === 'oos'){
     list = products.filter(p => p.inv === 0 && p.glance >= 50).sort((a,b) => b.glance - a.glance);
     cols = ['ASIN','Item','Genus','Glance','Units','Revenue'];
-    cells = p => [p.asin, p.title, p.genus, fmtN(p.glance), fmtN(p.units), fmt$(p.rev)];
+    cells = p => [H(p.asin), H(p.title), H(p.genus), fmtN(p.glance), fmtN(p.units), fmt$(p.rev)];
   } else {
     list = products.filter(p => p.glance >= 200 && p.conv < 0.01).sort((a,b) => b.glance - a.glance);
     cols = ['ASIN','Item','Genus','Glance','Conv','Units','Avg'];
-    cells = p => [p.asin, p.title, p.genus, fmtN(p.glance), pctFmt(p.conv), fmtN(p.units), fmt$(p.avg)];
+    cells = p => [H(p.asin), H(p.title), H(p.genus), fmtN(p.glance), pctFmt(p.conv), fmtN(p.units), fmt$(p.avg)];
   }
   document.getElementById(`${source}-alerts-count`).textContent = list.length + ' items';
   const thead = document.getElementById(`${source}-alerts-thead`);
@@ -1062,14 +1066,9 @@ function downloadTopPlants(source){
     : {"Plant title": p.title, Genus: p.genus, Type: getType(p.genus),
        "Net items sold": p.units, "Avg price": +p.avg.toFixed(2),
        "Total sales": +p.rev.toFixed(2)});
-  const ws = XLSX.utils.json_to_sheet(rows);
-  const csv = XLSX.utils.sheet_to_csv(ws);
-  const blob = new Blob([csv], {type:"text/csv;charset=utf-8"});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = `${source}-top-plants-${tp.threshold}-${snap.startDate}-to-${snap.endDate}.csv`;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  const head = rows.length ? Object.keys(rows[0]) : ["Plant title"];
+  sbDownloadCsv(`${source}-top-plants-${tp.threshold}-${snap.startDate}-to-${snap.endDate}.csv`,
+                [head].concat(rows.map(r => head.map(k => r[k]))));
 }
 
 function downloadBreakdown(source){
@@ -1224,9 +1223,9 @@ function renderCross(){
   const aSel = document.getElementById("cross-amazon-select");
   const sSel = document.getElementById("cross-shopify-select");
   aSel.innerHTML = '<option value="">— Pick Amazon snapshot —</option>' +
-    aSnaps.map(s => `<option value="${s.id}" ${s.id === state.cross.amazonId ? 'selected' : ''}>${s.label}</option>`).join('');
+    aSnaps.map(s => `<option value="${H(s.id)}" ${s.id === state.cross.amazonId ? 'selected' : ''}>${H(s.label)}</option>`).join('');
   sSel.innerHTML = '<option value="">— Pick Shopify snapshot —</option>' +
-    sSnaps.map(s => `<option value="${s.id}" ${s.id === state.cross.shopifyId ? 'selected' : ''}>${s.label}</option>`).join('');
+    sSnaps.map(s => `<option value="${H(s.id)}" ${s.id === state.cross.shopifyId ? 'selected' : ''}>${H(s.label)}</option>`).join('');
   const aSnap = snapshots.find(s => s.id === state.cross.amazonId);
   const sSnap = snapshots.find(s => s.id === state.cross.shopifyId);
   const content = document.getElementById("cross-content");
@@ -1306,7 +1305,7 @@ function renderCross(){
       {label:'Genera both channels', value: fmtN(cross.filter(g => g.aRev > 0 && g.sRev > 0 && g.genus !== '(no genus)').length)}
     ];
   document.getElementById("cross-cards").innerHTML = cards.map(c => `<div class="card"><div class="label">${c.label}</div><div class="value">${c.value}</div>${c.sub?`<div class="sub">${c.sub}</div>`:''}</div>`).join('');
-  document.getElementById("cross-banner").innerHTML = `<strong>${aSnap.label}</strong> (Amazon) vs <strong>${sSnap.label}</strong> (Shopify)`;
+  document.getElementById("cross-banner").innerHTML = `<strong>${H(aSnap.label)}</strong> (Amazon) vs <strong>${H(sSnap.label)}</strong> (Shopify)`;
 
   // Chart: top 25 by combined, stacked
   const top25 = plant.slice(0, 25);
@@ -1363,7 +1362,7 @@ function renderCross(){
   document.getElementById("cross-count").textContent = display.length + ' genera';
   tbody.innerHTML = display.map(g => {
     if (overlap){
-      return `<tr class="clickable" data-genus="${g.genus.replace(/"/g,'&quot;')}"><td>${g.genus}</td><td class="num">${fmt$(g.aRev)}</td><td class="num">${fmt$(g.sNonAmazon)}</td><td class="num">${fmt$(g.sRev)}</td><td class="num">${pctFmt(g.aShare)}</td></tr>`;
+      return `<tr class="clickable" data-genus="${H(g.genus)}"><td>${H(g.genus)}</td><td class="num">${fmt$(g.aRev)}</td><td class="num">${fmt$(g.sNonAmazon)}</td><td class="num">${fmt$(g.sRev)}</td><td class="num">${pctFmt(g.aShare)}</td></tr>`;
     }
     let dom = '—';
     if (g.aRev > 0 && g.sRev === 0) dom = `<span class="badge amazon">Amazon only</span>`;
@@ -1371,7 +1370,7 @@ function renderCross(){
     else if (g.aRev > g.sRev * 1.1) dom = `<span class="badge amazon">Amazon (${(g.aRev/g.sRev).toFixed(1)}×)</span>`;
     else if (g.sRev > g.aRev * 1.1) dom = `<span class="badge shopify">Shopify (${(g.sRev/g.aRev).toFixed(1)}×)</span>`;
     else dom = `<span class="badge balanced">Balanced</span>`;
-    return `<tr class="clickable" data-genus="${g.genus.replace(/"/g,'&quot;')}"><td>${g.genus}</td><td class="num">${fmt$(g.aRev)}</td><td class="num">${fmt$(g.sRev)}</td><td class="num">${separate ? '—' : fmt$(g.combined)}</td><td class="num">${separate ? '—' : pctFmt(g.aShare)}</td><td>${dom}</td></tr>`;
+    return `<tr class="clickable" data-genus="${H(g.genus)}"><td>${H(g.genus)}</td><td class="num">${fmt$(g.aRev)}</td><td class="num">${fmt$(g.sRev)}</td><td class="num">${separate ? '—' : fmt$(g.combined)}</td><td class="num">${separate ? '—' : pctFmt(g.aShare)}</td><td>${dom}</td></tr>`;
   }).join('');
   // Wire row-click → drill into plants for that genus
   tbody.querySelectorAll('tr.clickable').forEach(tr =>
@@ -1410,7 +1409,7 @@ function renderOpportunities(cross, overlap){
   const sec = (title, color, items, cols, render, hint) => {
     if (!items.length) return '';
     const head = cols.map((c,i) => `<th class="${i===0?'':'num'}">${c}</th>`).join('');
-    const rows = items.map(g => `<tr>${render(g).map((c,i)=>`<td class="${i===0?'':'num'}">${c}</td>`).join('')}</tr>`).join('');
+    const rows = items.map(g => `<tr>${render(g).map((c,i)=>`<td class="${i===0?'':'num'}">${H(c)}</td>`).join('')}</tr>`).join('');
     return `
       <div style="margin-top:14px">
         <h3 style="margin:0 0 4px 0;color:${color};font-size:14px">${title} <span class="pill" style="background:${color}22;color:${color}">${items.length}</span></h3>
@@ -1470,7 +1469,7 @@ function renderCrossDrill(genus, aSnap, sSnap, overlap){
   const shareLabel = overlap ? 'Amazon share of Shopify' : 'Amazon share of combined';
   const headerHtml = `
     <div class="panel-h">
-      <h2 id="cross-drill-title">${genus} — plants on each channel</h2>
+      <h2 id="cross-drill-title">${H(genus)} — plants on each channel</h2>
       <div class="actions"><button class="tab" id="cross-drill-close">Close</button></div>
     </div>
     <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px">
@@ -1499,7 +1498,7 @@ function renderCrossDrill(genus, aSnap, sSnap, overlap){
     return `<th data-ax="${i}" class="${i===0||i===1||i===2?'':'num'}"${clickable}>${c}${arrow}</th>`;
   }).join('');
   const aBody = aSorted.map((p,i) =>
-    `<tr><td>${i+1}</td><td>${p.asin}</td><td>${p.title}</td><td class="num">${fmtN(p.units)}</td><td class="num">${fmt$(p.rev)}</td></tr>`).join('')
+    `<tr><td>${i+1}</td><td>${H(p.asin)}</td><td>${H(p.title)}</td><td class="num">${fmtN(p.units)}</td><td class="num">${fmt$(p.rev)}</td></tr>`).join('')
     || `<tr><td colspan="5" class="empty">No Amazon plants in this genus.</td></tr>`;
 
   const sKeys = [null, 'title', 'units', 'rev'];
@@ -1512,7 +1511,7 @@ function renderCrossDrill(genus, aSnap, sSnap, overlap){
     return `<th data-sx="${i}" class="${i===0||i===1?'':'num'}"${clickable}>${c}${arrow}</th>`;
   }).join('');
   const sBody = sSorted.map((p,i) =>
-    `<tr><td>${i+1}</td><td>${p.title}</td><td class="num">${fmtN(p.units)}</td><td class="num">${fmt$(p.rev)}</td></tr>`).join('')
+    `<tr><td>${i+1}</td><td>${H(p.title)}</td><td class="num">${fmtN(p.units)}</td><td class="num">${fmt$(p.rev)}</td></tr>`).join('')
     || `<tr><td colspan="4" class="empty">No Shopify plants in this genus.</td></tr>`;
 
   document.getElementById("cross-drill").innerHTML = headerHtml + `
@@ -1568,7 +1567,7 @@ function generateInsights(source, snap, priSnap){
     const topP = g.items.slice().sort((a,b) => b.rev - a.rev)[0];
     if (topP && g.rev > 0 && topP.rev / g.rev > 0.5){
       insights.push({icon:"⚠", title:`${g.genus} concentration risk`, body:
-        `<strong>${topP.title.slice(0,60)}${topP.title.length>60?'…':''}</strong> alone is <strong>${pctFmt(topP.rev/g.rev)}</strong> of ${g.genus} revenue (${fmt$(topP.rev)}). One product away from a hole.` });
+        `<strong>${H(topP.title.slice(0,60))}${topP.title.length>60?'…':''}</strong> alone is <strong>${pctFmt(topP.rev/g.rev)}</strong> of ${H(g.genus)} revenue (${fmt$(topP.rev)}). One product away from a hole.` });
       break;  // Only surface the biggest one
     }
   }
@@ -1588,11 +1587,11 @@ function generateInsights(source, snap, priSnap){
     const decliners = meaningful.filter(g => g.pct < -0.10 && g.pt >= 100).sort((a,b) => a.pct - b.pct).slice(0, 3);
     if (gainers.length){
       insights.push({icon:"🚀", title:"Top gainers", body: gainers.map(g =>
-        `<strong>${g.genus}</strong> ${arrow(g.pct)} ${pctFmt(g.pct)} (${fmt$(g.pt)} → ${fmt$(g.ct)})`).join("<br>")});
+        `<strong>${H(g.genus)}</strong> ${arrow(g.pct)} ${pctFmt(g.pct)} (${fmt$(g.pt)} → ${fmt$(g.ct)})`).join("<br>")});
     }
     if (decliners.length){
       insights.push({icon:"📉", title:"Biggest decliners", body: decliners.map(g =>
-        `<strong>${g.genus}</strong> ${arrow(g.pct)} ${pctFmt(g.pct)} (${fmt$(g.pt)} → ${fmt$(g.ct)})`).join("<br>")});
+        `<strong>${H(g.genus)}</strong> ${arrow(g.pct)} ${pctFmt(g.pct)} (${fmt$(g.pt)} → ${fmt$(g.ct)})`).join("<br>")});
     }
 
     // New plants: no prior revenue, ≥ $100 current
@@ -1601,7 +1600,7 @@ function generateInsights(source, snap, priSnap){
     if (newPlants.length){
       insights.push({icon:"✨", title:`New wins (${newPlants.length}${newPlants.length===5?'+':''})`, body:
         "Plants that earned real revenue this period with zero prior:<br>" + newPlants.map(p =>
-        `<strong>${p.t.slice(0,50)}${p.t.length>50?'…':''}</strong> — ${fmt$(p.ct)}`).join("<br>")});
+        `<strong>${H(p.t.slice(0,50))}${p.t.length>50?'…':''}</strong> — ${fmt$(p.ct)}`).join("<br>")});
     }
 
     // Lost plants: had ≥ $100 prior, $0 current
@@ -1612,7 +1611,7 @@ function generateInsights(source, snap, priSnap){
       insights.push({icon:"👻", title:`Vanished plants (${lostPlants.length}${lostPlants.length===5?'+':''})`, body:
         `Sold prior, $0 now. Total lost revenue: <strong>${fmt$(lostRev)}</strong>.<br>` +
         lostPlants.map(p =>
-        `<strong>${p.t.slice(0,50)}${p.t.length>50?'…':''}</strong> — was ${fmt$(p.pt)}`).join("<br>")});
+        `<strong>${H(p.t.slice(0,50))}${p.t.length>50?'…':''}</strong> — was ${fmt$(p.pt)}`).join("<br>")});
     }
   }
 
@@ -1639,7 +1638,7 @@ function generateInsights(source, snap, priSnap){
     if (bestConv.length){
       insights.push({icon:"🎯", title:"Highest-conversion genera", body:
         "Where PPC dollars work hardest:<br>" + bestConv.map(g =>
-        `<strong>${g.genus}</strong> — ${pctFmt(g.conv)} conv on ${fmtN(g.glance)} views`).join("<br>")});
+        `<strong>${H(g.genus)}</strong> — ${pctFmt(g.conv)} conv on ${fmtN(g.glance)} views`).join("<br>")});
     }
   }
 
@@ -1658,7 +1657,7 @@ function renderInsights(source, snap, priSnap){
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px">
       ${insights.map(i => `
         <div style="border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:#fbfefb">
-          <div style="font-weight:600;color:var(--accent);margin-bottom:4px">${i.icon} ${i.title}</div>
+          <div style="font-weight:600;color:var(--accent);margin-bottom:4px">${i.icon} ${H(i.title)}</div>
           <div style="font-size:13px;line-height:1.5">${i.body}</div>
         </div>`).join('')}
     </div>`;
@@ -1701,7 +1700,7 @@ function generateCrossInsights(aSnap, sSnap, overlap, separate){
     const shopOnlyTotal = shopOnly.reduce((s,x) => s+x.sRev, 0);
     insights.push({icon:"🚀", title:`${shopOnly.length} genera not on Amazon`, body:
       `Total Shopify revenue in the gap: <strong>${fmt$(shopOnlyTotal)}</strong>. Biggest launches to consider:<br>` +
-      shopOnly.slice(0, 5).map(x => `<strong>${x.g}</strong> — ${fmt$(x.sRev)} on Shopify`).join("<br>")});
+      shopOnly.slice(0, 5).map(x => `<strong>${H(x.g)}</strong> — ${fmt$(x.sRev)} on Shopify`).join("<br>")});
   }
 
   // Amazon-strong genera
@@ -1715,7 +1714,7 @@ function generateCrossInsights(aSnap, sSnap, overlap, separate){
     insights.push({icon:"⭐", title:`${strong.length} genera perform well on Amazon`, body:
       "Amazon revenue > 20% of Shopify — worth PPC investment:<br>" +
       strong.slice(0, 5).map(x =>
-      `<strong>${x.g}</strong> — Amazon ${pctFmt(x.ratio)} of Shopify (${fmt$(x.a)} vs ${fmt$(x.s)})`).join("<br>")});
+      `<strong>${H(x.g)}</strong> — Amazon ${pctFmt(x.ratio)} of Shopify (${fmt$(x.a)} vs ${fmt$(x.s)})`).join("<br>")});
   }
 
   return insights;
@@ -1733,7 +1732,7 @@ function renderCrossInsights(aSnap, sSnap, overlap, separate){
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px">
       ${insights.map(i => `
         <div style="border:1px solid var(--border);border-radius:10px;padding:12px 14px;background:#fbfefb">
-          <div style="font-weight:600;color:var(--accent);margin-bottom:4px">${i.icon} ${i.title}</div>
+          <div style="font-weight:600;color:var(--accent);margin-bottom:4px">${i.icon} ${H(i.title)}</div>
           <div style="font-size:13px;line-height:1.5">${i.body}</div>
         </div>`).join('')}
     </div>`;
@@ -1766,7 +1765,7 @@ function openManage(){
       rows.map((s, i) => {
         const kb = sizes[i];
         const isBig = kb > 500;
-        return `<tr><td><span class="badge ${s.source}">${s.source}</span></td><td>${s.label}</td><td>${s.products.length}</td><td class="num" ${isBig?'style="color:#c62828;font-weight:600"':''}>${kb.toLocaleString()} KB</td><td>${new Date(s.uploadedAt).toLocaleDateString()}</td><td><button class="tab" data-edit="${s.id}">Edit period</button> <button class="tab danger" data-del="${s.id}">Delete</button></td></tr>`;
+        return `<tr><td><span class="badge ${s.source}">${s.source}</span></td><td>${H(s.label)}</td><td>${s.products.length}</td><td class="num" ${isBig?'style="color:#c62828;font-weight:600"':''}>${kb.toLocaleString()} KB</td><td>${new Date(s.uploadedAt).toLocaleDateString()}</td><td><button class="tab" data-edit="${H(s.id)}">Edit period</button> <button class="tab danger" data-del="${H(s.id)}">Delete</button></td></tr>`;
       }).join('')}</tbody></table>`;
     body.querySelectorAll('[data-edit]').forEach(btn =>
       btn.addEventListener('click', () => editSnapshotPeriod(btn.dataset.edit)));
@@ -1887,8 +1886,8 @@ document.addEventListener('DOMContentLoaded', () => {
     b.addEventListener('click', () => switchTab(b.dataset.tab)));
   setupDropzone('amazon'); setupDropzone('shopify'); setupDropzone('external');
   setupExternalHandlers(); setupOppMapHandlers(); setupOwnedVsMarketHandlers(); setupPlantOppHandlers(); setupExtraSkuHandlers();
-  if (typeof setupMcgHandlers === "function") setupMcgHandlers();
-  if (typeof mcgAutoLoad === "function") mcgAutoLoad();
+  if (typeof setupTrackerHandlers === "function") setupTrackerHandlers();
+  if (typeof trackerAutoLoad === "function") trackerAutoLoad();
   if (typeof sbCatalogAutoLoad === "function") sbCatalogAutoLoad();
   for (const src of ['amazon','shopify']) {
     document.getElementById(`${src}-snap-select`).addEventListener('change', e => {
@@ -1963,8 +1962,14 @@ document.addEventListener('DOMContentLoaded', () => {
 // EXTERNAL STORES (ShipStation line-item exports)
 // ============================================================
 
-// Focus stores — shown prominently on External Stores tab
-const EXTERNAL_FOCUS_STORES = ['Mountain Crest Gardens', 'Leaf & Clay'];
+// Market store grouping, focus stores and marketplace presets are private
+// business configuration: they come from the shared setting "market_config"
+// (window.SBMarketConfig, loaded after sign-in), never from this file.
+// Without it, stores are shown under their own names and nothing is grouped.
+function marketCfg() { return window.SBMarketConfig || {}; }
+function externalFocusStores() { return Array.isArray(marketCfg().focusStores) ? marketCfg().focusStores : []; }
+function marketplaceStoreName() { return marketCfg().marketplaceStore || ""; }
+function safeRegex(src) { try { return new RegExp(src, "i"); } catch (e) { return null; } }
 
 // Extend state
 state.external = { snapshotId: null, mode: 'single', compareId: null,
@@ -1990,9 +1995,10 @@ state.genusSort.external = { col: 1, dir: 'desc' };  // 1 = units desc
 function normalizeExternalStore(raw) {
   const s = String(raw || '').trim();
   if (!s) return 'Unknown';
-  const low = s.toLowerCase();
-  if (low.includes('mountain crest') || /\bmcg\b/i.test(low)) return 'Mountain Crest Gardens';
-  if (low.includes('leaf & clay') || low.includes('leaf and clay')) return 'Leaf & Clay';
+  for (const g of (marketCfg().storeGroups || [])) {
+    const re = safeRegex(g.match);
+    if (re && re.test(s)) return g.group;
+  }
   return s;
 }
 
@@ -2062,12 +2068,9 @@ function parseShipStation(rows, filename) {
   const hasCompanion = companion && Object.keys(companion).length > 0;
   let defaultStore = "";
   if (iStore < 0) {
-    const fn = String(filename || "").toLowerCase();
-    if (/mcg|mountain\s*crest/i.test(fn)) defaultStore = "Mountain Crest Gardens (MCG)";
-    else if (/leaf\s*&?\s*clay/i.test(fn)) defaultStore = "Leaf & Clay (Shopify)";
-    else if (/faire/i.test(fn)) defaultStore = "Faire";
-    else if (/etsy/i.test(fn)) defaultStore = "Etsy";
-    else defaultStore = "External (unknown store)";
+    const fn = String(filename || "");
+    const hit = (marketCfg().filenameStores || []).find(f => { const re = safeRegex(f.match); return re && re.test(fn); });
+    defaultStore = hit ? hit.store : (/etsy/i.test(fn) ? "Etsy" : (marketCfg().unknownFileStore || "External (unknown store)"));
   }
   const num = x => {
     if (typeof x === 'number') return x;
@@ -2096,7 +2099,7 @@ function parseShipStation(rows, filename) {
       joinedFromCompanion++;
     } else {
       // Amazon order numbers start with 3-digit prefix + dash
-      rawStore = /^\d{3}-/.test(orderId) ? 'Amazon (MCG)' : defaultStore;
+      rawStore = /^\d{3}-/.test(orderId) ? (marketCfg().marketplaceOrderStore || 'Amazon (external)') : defaultStore;
       orderTotal = 0;
       orderDate  = iDate >= 0 ? String(r[iDate] || '').trim() : '';
       fellBackToDefault++;
@@ -2204,9 +2207,9 @@ function renderExternal() {
   // Compare snapshot (optional)
   const cmpSnap = s.compareId ? snapshots.find(x => x.id === s.compareId) : null;
   const cmpProducts = cmpSnap ? cmpSnap.products : null;
-  const cmpBanner = cmpSnap ? ` &nbsp;<span class="badge" style="background:#fff3e0;color:#e65100">vs ${cmpSnap.label}</span>` : '';
+  const cmpBanner = cmpSnap ? ` &nbsp;<span class="badge" style="background:#fff3e0;color:#e65100">vs ${H(cmpSnap.label)}</span>` : '';
   document.getElementById('external-mode-banner').innerHTML =
-    `<strong>${snap.label}</strong> · ${products.length.toLocaleString()} line items · uploaded ${new Date(snap.uploadedAt).toLocaleDateString()}${cmpBanner}
+    `<strong>${H(snap.label)}</strong> · ${products.length.toLocaleString()} line items · uploaded ${new Date(snap.uploadedAt).toLocaleDateString()}${cmpBanner}
      &nbsp; <span class="small">Market signal — never summed with your Amazon/Shopify totals.</span>`;
 
   // Store aggregation
@@ -2274,7 +2277,9 @@ function renderExternalSummaryCards(byStore, products, cmpByStore, cmpProducts) 
 }
 
 function renderExternalFocusCards(byStore, cmpByStore) {
-  const focus = byStore.filter(s => EXTERNAL_FOCUS_STORES.some(f => s.store.includes(f) || f.includes(s.store)));
+  const focusNames = document.getElementById('external-focus-names');
+  if (focusNames) focusNames.textContent = externalFocusStores().length ? externalFocusStores().join(' · ') : 'No focus stores configured';
+  const focus = byStore.filter(s => externalFocusStores().some(f => s.store.includes(f) || f.includes(s.store)));
   const container = document.getElementById('external-focus-cards');
   if (!focus.length) {
     container.innerHTML = '<div class="small">No focus stores found in this file. All external stores shown below.</div>';
@@ -2285,12 +2290,13 @@ function renderExternalFocusCards(byStore, cmpByStore) {
   const snap = snapshots.find(x => x.id === state.external.snapshotId);
   let extraCards = '';
   if (snap && state.external.groupByParent) {
-    const mcgAmazonProducts = snap.products.filter(p => p.rawStore === 'Amazon (MCG)');
-    if (mcgAmazonProducts.length) {
-      const mcgAmazon = aggregateExternalByStore(mcgAmazonProducts, false)[0];
-      if (mcgAmazon) {
-        mcgAmazon.store = 'MCG Amazon (breakdown)';
-        extraCards = renderStoreCard(mcgAmazon, false);
+    const mpStore = marketplaceStoreName();
+    const marketplaceProducts = mpStore ? snap.products.filter(p => p.rawStore === mpStore) : [];
+    if (marketplaceProducts.length) {
+      const marketplaceStoreRow = aggregateExternalByStore(marketplaceProducts, false)[0];
+      if (marketplaceStoreRow) {
+        marketplaceStoreRow.store = marketCfg().marketplaceBreakdownLabel || (mpStore + ' (breakdown)');
+        extraCards = renderStoreCard(marketplaceStoreRow, false);
       }
     }
   }
@@ -2298,7 +2304,7 @@ function renderExternalFocusCards(byStore, cmpByStore) {
 }
 
 function renderExternalOtherStores(byStore) {
-  const other = byStore.filter(s => !EXTERNAL_FOCUS_STORES.some(f => s.store.includes(f) || f.includes(s.store)));
+  const other = byStore.filter(s => !externalFocusStores().some(f => s.store.includes(f) || f.includes(s.store)));
   const wrap = document.getElementById('external-other-wrap');
   if (!other.length) { wrap.style.display = 'none'; return; }
   wrap.style.display = 'block';
@@ -2309,13 +2315,13 @@ function renderExternalOtherStores(byStore) {
 function renderStoreCard(s, isFocus, prior) {
   const genera = aggregateExternalByGenus(s.products);
   const topGenera = genera.filter(g => g.genus !== '(no genus)').slice(0, 3);
-  const topGeneraTxt = topGenera.map(g => `${g.genus} (${g.units})`).join(', ') || '—';
+  const topGeneraTxt = topGenera.map(g => `${H(g.genus)} (${g.units})`).join(', ') || '—';
   const dRev = prior ? fmtDelta(s.rev, prior.rev, fmt$) : '';
   const dOrd = prior ? fmtDelta(s.orders, prior.orders, fmtN) : '';
   const dUn  = prior ? fmtDelta(s.units, prior.units, fmtN) : '';
   const dAov = prior ? fmtDelta(s.aov, prior.aov, fmt$) : '';
   return `<div class="card store-card ${isFocus ? 'focus' : ''}">
-    <div style="font-weight:600;font-size:14px;color:#e65100;margin-bottom:6px">${s.store}</div>
+    <div style="font-weight:600;font-size:14px;color:#e65100;margin-bottom:6px">${H(s.store)}</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px">
       <div><div class="small">Revenue</div><div style="font-weight:600">${fmt$(s.rev)}</div>${dRev}</div>
       <div><div class="small">Orders</div><div style="font-weight:600">${fmtN(s.orders)}</div>${dOrd}</div>
@@ -2330,7 +2336,7 @@ function renderExternalStoreFilter(byStore) {
   const sel = document.getElementById('external-store-filter');
   const cur = state.external.storeFilter;
   sel.innerHTML = '<option value="all">All stores</option>' +
-    byStore.map(s => `<option value="${s.store}" ${s.store === cur ? 'selected' : ''}>${s.store} (${fmt$(s.rev)})</option>`).join('');
+    byStore.map(s => `<option value="${H(s.store)}" ${s.store === cur ? 'selected' : ''}>${H(s.store)} (${fmt$(s.rev)})</option>`).join('');
 }
 
 function renderExternalChart(genera) {
@@ -2394,13 +2400,13 @@ function renderExternalGenusTable(genera, cmpGenera) {
     `<th class="${c.num ? 'num' : ''}" data-genus-sort="${i}">${c.label}${i === ss.col ? (ss.dir === 'asc' ? ' ▲' : ' ▼') : ''}</th>`).join('');
   document.getElementById('external-genus-tbody').innerHTML = sorted.map(g => {
     const t = getType(g.genus);
-    const typeCell = t ? `<span class="badge type-${t.toLowerCase().replace(/\s/g,'')}">${t}</span>` : '';
+    const typeCell = t ? `<span class="badge type-${String(t).toLowerCase().replace(/[^a-z]/g,'')}">${H(t)}</span>` : '';
     const prior = cmpMap[g.genus];
-    return `<tr class="clickable" data-drill-genus="${g.genus}">${cols.map(c => {
+    return `<tr class="clickable" data-drill-genus="${H(g.genus)}">${cols.map(c => {
       if (c.key === 'type') return `<td>${typeCell}</td>`;
       if (c.key === 'unitsDelta') return `<td class="num">${fmtDelta(g.units, prior ? prior.units : 0, fmtN)}</td>`;
       if (c.key === 'revDelta')   return `<td class="num">${fmtDelta(g.estRev, prior ? prior.estRev : 0, fmt$)}</td>`;
-      return `<td class="${c.num ? 'num' : ''}">${c.fmt ? c.fmt(g[c.key]) : g[c.key]}</td>`;
+      return `<td class="${c.num ? 'num' : ''}">${c.fmt ? c.fmt(g[c.key]) : H(g[c.key])}</td>`;
     }).join('')}</tr>`;
   }).join('');
   document.getElementById('external-genus-count').textContent = sorted.length + ' genera';
@@ -2439,7 +2445,7 @@ function renderExternalTopPlants(products) {
   document.getElementById('external-tp-thead').innerHTML = cols.map((c, i) =>
     `<th class="${c.num ? 'num' : ''}" data-tp-sort="${i}">${c.label}${i === tp.sortCol ? (tp.sortDir === 'asc' ? ' ▲' : ' ▼') : ''}</th>`).join('');
   document.getElementById('external-tp-tbody').innerHTML = plants.slice(0, 500).map(p =>
-    `<tr>${cols.map(c => `<td class="${c.num ? 'num' : ''}">${c.fmt ? c.fmt(p[c.key]) : (p[c.key] || '')}</td>`).join('')}</tr>`).join('');
+    `<tr>${cols.map(c => `<td class="${c.num ? 'num' : ''}">${c.fmt ? c.fmt(p[c.key]) : H(p[c.key] || '')}</td>`).join('')}</tr>`).join('');
   document.getElementById('external-tp-count').textContent = plants.length + ' plants';
   document.getElementById('external-tp-thead').querySelectorAll('[data-tp-sort]').forEach(th =>
     th.addEventListener('click', () => {
@@ -2455,7 +2461,7 @@ function renderExternalDrill(genus, genera) {
   const panel = document.getElementById('external-drill');
   if (!g) { panel.style.display = 'none'; return; }
   panel.style.display = 'block';
-  document.getElementById('external-drill-title').innerHTML = `${genus} <span class="pill">${g.items.length} lines · ${fmtN(g.units)} units</span>`;
+  document.getElementById('external-drill-title').innerHTML = `${H(genus)} <span class="pill">${g.items.length} lines · ${fmtN(g.units)} units</span>`;
   const search = (document.getElementById('external-prod-search').value || '').toLowerCase();
   // Aggregate items in this genus by title
   const byTitle = aggregateExternalByPlant(g.items).filter(p => !search || p.title.toLowerCase().includes(search));
@@ -2483,7 +2489,7 @@ function renderExternalDrill(genus, genera) {
     return `<th class="${c.num ? 'num' : ''}" data-ext-drill-sort="${i}">${c.label}${arrow}</th>`;
   }).join('');
   document.getElementById('external-prod-tbody').innerHTML = byTitle.map(p =>
-    `<tr>${cols.map(c => `<td class="${c.num ? 'num' : ''}">${c.fmt ? c.fmt(p[c.key]) : (p[c.key] || '')}</td>`).join('')}</tr>`).join('');
+    `<tr>${cols.map(c => `<td class="${c.num ? 'num' : ''}">${c.fmt ? c.fmt(p[c.key]) : H(p[c.key] || '')}</td>`).join('')}</tr>`).join('');
   document.getElementById('external-drill-count').textContent = byTitle.length + ' plants';
   document.getElementById('external-prod-thead').querySelectorAll('[data-ext-drill-sort]').forEach(th => {
     th.addEventListener('click', () => {
@@ -2502,13 +2508,13 @@ function renderExternalInsights(snap, byStore, genera) {
   if (byStore.length) {
     const top = byStore[0];
     cards.push({icon: '🏪', title: 'Biggest external footprint',
-      body: `<strong>${top.store}</strong> — ${fmt$(top.rev)} across ${fmtN(top.orders)} orders (${fmtN(top.units)} units). AOV ${fmt$(top.aov)}.`});
+      body: `<strong>${H(top.store)}</strong> — ${fmt$(top.rev)} across ${fmtN(top.orders)} orders (${fmtN(top.units)} units). AOV ${fmt$(top.aov)}.`});
   }
   // Insight: top genus overall
   const topGenera = genera.filter(g => g.genus !== '(no genus)').slice(0, 3);
   if (topGenera.length) {
     cards.push({icon: '🌱', title: 'What the market is moving',
-      body: `Top genera by units: ${topGenera.map(g => `<strong>${g.genus}</strong> (${fmtN(g.units)})`).join(', ')}. Strong external demand signal.`});
+      body: `Top genera by units: ${topGenera.map(g => `<strong>${H(g.genus)}</strong> (${fmtN(g.units)})`).join(', ')}. Strong external demand signal.`});
   }
   // Bundle blind-spot warning
   const noGenus = genera.find(g => g.genus === '(no genus)');
@@ -2522,7 +2528,7 @@ function renderExternalInsights(snap, byStore, genera) {
   el.innerHTML = `<div class="panel-h"><h2>💡 Market insights <span class="pill">${cards.length}</span></h2></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px">
       ${cards.map(c => `<div style="border:1px solid #ffe0b2;border-radius:10px;padding:12px 14px;background:#fffaf3">
-        <div style="font-weight:600;color:#e65100;margin-bottom:4px">${c.icon} ${c.title}</div>
+        <div style="font-weight:600;color:#e65100;margin-bottom:4px">${c.icon} ${H(c.title)}</div>
         <div style="font-size:13px;line-height:1.5">${c.body}</div></div>`).join('')}
     </div>`;
 }
@@ -2555,7 +2561,7 @@ function computeOpportunityMap() {
   if (sh) addOwned(sh.products, 'shopify');
 
   // External genera (units + est. rev, aggregated across all stores in that snapshot)
-  // Apply store filter if user narrowed to a specific external store (e.g. "Amazon (MCG)")
+  // Apply store filter if user narrowed to a specific external store
   let extProducts = ex.products;
   const sf = state.oppmap.storeFilter;
   if (sf && sf !== 'all') {
@@ -2611,7 +2617,7 @@ function renderOppMap() {
   const amSnaps = snapshotsFor('amazon'), shSnaps = snapshotsFor('shopify'), exSnaps = snapshotsFor('external');
   const fill = (id, snaps, cur) => {
     document.getElementById(id).innerHTML = '<option value="">— None —</option>' +
-      snaps.map(s => `<option value="${s.id}" ${s.id === cur ? 'selected' : ''}>${s.label}</option>`).join('');
+      snaps.map(s => `<option value="${H(s.id)}" ${s.id === cur ? 'selected' : ''}>${H(s.label)}</option>`).join('');
   };
   fill('oppmap-amazon-select', amSnaps, s.amazonId);
   fill('oppmap-shopify-select', shSnaps, s.shopifyId);
@@ -2624,7 +2630,7 @@ function renderOppMap() {
     if (exSnap) {
       const stores = aggregateExternalByStore(exSnap.products, s.storeGroupByParent);
       storeFilterEl.innerHTML = '<option value="all">All external stores</option>' +
-        stores.map(st => `<option value="${st.store}" ${st.store === s.storeFilter ? 'selected' : ''}>${st.store} (${fmt$(st.rev)})</option>`).join('');
+        stores.map(st => `<option value="${H(st.store)}" ${st.store === s.storeFilter ? 'selected' : ''}>${H(st.store)} (${fmt$(st.rev)})</option>`).join('');
     } else {
       storeFilterEl.innerHTML = '<option value="all">All external stores</option>';
     }
@@ -2640,11 +2646,11 @@ function renderOppMap() {
   document.getElementById('oppmap-content').style.display = 'block';
   document.getElementById('oppmap-empty').style.display = 'none';
   const parts = [];
-  if (map.am) parts.push(`Amazon <strong>${map.am.label}</strong>`);
-  if (map.sh) parts.push(`Shopify <strong>${map.sh.label}</strong>`);
+  if (map.am) parts.push(`Amazon <strong>${H(map.am.label)}</strong>`);
+  if (map.sh) parts.push(`Shopify <strong>${H(map.sh.label)}</strong>`);
   const mktLabel = (s.storeFilter && s.storeFilter !== 'all')
-    ? `<strong>${s.storeFilter}</strong> (${map.ex.label})`
-    : `Market <strong>${map.ex.label}</strong>`;
+    ? `<strong>${H(s.storeFilter)}</strong> (${H(map.ex.label)})`
+    : `Market <strong>${H(map.ex.label)}</strong>`;
   parts.push('vs ' + mktLabel);
   document.getElementById('oppmap-banner').innerHTML = parts.join(' + ') +
     ` &nbsp; <span class="small">Soft-market cutoff: ${fmt$(map.softCutoff)}</span>`;
@@ -2686,11 +2692,11 @@ function renderOppMap() {
     `<th class="${c.num ? 'num' : ''}">${c.label}</th>`).join('');
   document.getElementById('oppmap-tbody').innerHTML = filtered.map(r => {
     const t = getType(r.genus);
-    const typeBadge = t ? `<span class="badge type-${t.toLowerCase().replace(/\s/g,'')}">${t}</span>` : '';
+    const typeBadge = t ? `<span class="badge type-${String(t).toLowerCase().replace(/[^a-z]/g,'')}">${H(t)}</span>` : '';
     return `<tr>${cols.map(c => {
       if (c.k === 'signal') return `<td><span class="badge sig-${r.signal}">${sigInfo[r.signal].icon}</span></td>`;
       if (c.k === 'type') return `<td>${typeBadge}</td>`;
-      return `<td class="${c.num ? 'num' : ''}">${c.fmt ? c.fmt(r[c.k]) : (r[c.k] || '')}</td>`;
+      return `<td class="${c.num ? 'num' : ''}">${c.fmt ? c.fmt(r[c.k]) : H(r[c.k] || '')}</td>`;
     }).join('')}</tr>`;
   }).join('');
   document.getElementById('oppmap-count').textContent = filtered.length + ' genera';
@@ -2708,8 +2714,8 @@ function downloadExternalClean() {
     'Order #': p.orderId, 'Order Date': p.orderDate, 'Raw Store': p.rawStore,
     'Parent Brand': p.store, 'SKU': p.sku, 'Item Name': p.title,
     'Genus': p.genus, 'Quantity': p.units,
-    'Order Total ($)': (p.orderTotal || 0).toFixed(2),
-    'Est. Line Rev ($)': (p.estRev || 0).toFixed(2)
+    'Order Total ($)': num2((p.orderTotal || 0)),
+    'Est. Line Rev ($)': num2((p.estRev || 0))
   }));
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new();
@@ -2725,12 +2731,12 @@ function downloadExternalBreakdown() {
   const byStore = aggregateExternalByStore(snap.products, state.external.groupByParent);
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(byStore.map(s => ({
     Store: s.store, Orders: s.orders, Units: s.units,
-    'Revenue ($)': s.rev.toFixed(2), 'AOV ($)': s.aov.toFixed(2)
+    'Revenue ($)': num2(s.rev), 'AOV ($)': num2(s.aov)
   }))), 'Summary by Store');
   // Genus sheet (all stores combined)
   const genera = aggregateExternalByGenus(snap.products);
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(genera.map(g => ({
-    Genus: g.genus, Units: g.units, 'Est. Rev ($)': g.estRev.toFixed(2),
+    Genus: g.genus, Units: g.units, 'Est. Rev ($)': num2(g.estRev),
     Orders: g.orders, SKUs: g.skus
   }))), 'Genera - All Stores');
   // Per-store: one sheet per store with top plants
@@ -2739,7 +2745,7 @@ function downloadExternalBreakdown() {
     const sheetName = (s.store.length > 30 ? s.store.slice(0, 30) : s.store).replace(/[\/\\\?\*\[\]:]/g, ' ');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(plants.map(p => ({
       Plant: p.title, SKU: p.sku, Genus: p.genus,
-      Units: p.units, 'Est. Rev ($)': p.estRev.toFixed(2), Orders: p.orders
+      Units: p.units, 'Est. Rev ($)': num2(p.estRev), Orders: p.orders
     }))), sheetName);
   }
   XLSX.writeFile(wb, `external-breakdown-${snap.label.replace(/\s+/g, '')}.xlsx`);
@@ -2750,16 +2756,9 @@ function downloadExternalTopPlants() {
   if (!snap) return;
   const thresh = state.external.topThreshold;
   const plants = aggregateExternalByPlant(snap.products).filter(p => p.units >= thresh);
-  const csv = 'Plant,SKU,Genus,Units,Est. Rev ($),Orders,Stores\n' +
-    plants.map(p => [
-      `"${(p.title || '').replace(/"/g, '""')}"`, p.sku || '', p.genus || '',
-      p.units, p.estRev.toFixed(2), p.orders, p.storeCount
-    ].join(',')).join('\n');
-  const blob = new Blob([csv], {type: 'text/csv'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = `external-top-plants-${snap.label.replace(/\s+/g, '')}.csv`;
-  a.click(); URL.revokeObjectURL(url);
+  sbDownloadCsv(`external-top-plants-${snap.label.replace(/\s+/g, '')}.csv`,
+    [['Plant', 'SKU', 'Genus', 'Units', 'Est. Rev ($)', 'Orders', 'Stores']].concat(plants.map(p => [
+      p.title || '', p.sku || '', p.genus || '', p.units, p.estRev.toFixed(2), p.orders, p.storeCount])));
 }
 
 function downloadOppMap() {
@@ -2776,11 +2775,11 @@ function downloadOppMap() {
   const rows = map.rows.map(r => ({
     Signal: sigLabels[r.signal],
     Genus: r.genus,
-    "Your Amazon ($)": r.amazon.toFixed(2),
-    "Your Shopify ($)": r.shopify.toFixed(2),
-    "Your Total ($)": r.yourRev.toFixed(2),
+    "Your Amazon ($)": num2(r.amazon),
+    "Your Shopify ($)": num2(r.shopify),
+    "Your Total ($)": num2(r.yourRev),
     "Market Units": r.mktUnits,
-    "Market Rev (est. $)": r.mktRev.toFixed(2),
+    "Market Rev (est. $)": num2(r.mktRev),
     Action: r.action
   }));
   const wb = XLSX.utils.book_new();
@@ -2855,7 +2854,7 @@ function setupOppMapHandlers() {
   });
   document.getElementById("oppmap-preset-amazon").addEventListener("click", function() {
     state.oppmap.storeGroupByParent = false;
-    state.oppmap.storeFilter = "Amazon (MCG)";
+    state.oppmap.storeFilter = marketplaceStoreName() || "all";
     renderOppMap();
   });
   document.getElementById("oppmap-preset-all").addEventListener("click", function() {
@@ -2944,7 +2943,7 @@ function renderOwnedVsMarket() {
   var amSnaps = snapshotsFor("amazon"), shSnaps = snapshotsFor("shopify"), exSnaps = snapshotsFor("external");
   function fill(id, snaps, cur) {
     document.getElementById(id).innerHTML = '<option value="">-- None --</option>' +
-      snaps.map(function(sn){return '<option value="' + sn.id + '" ' + (sn.id === cur ? "selected" : "") + '>' + sn.label + '</option>';}).join("");
+      snaps.map(function(sn){return '<option value="' + H(sn.id) + '" ' + (sn.id === cur ? "selected" : "") + '>' + H(sn.label) + '</option>';}).join("");
   }
   fill("ovm-amazon-select", amSnaps, s.amazonId);
   fill("ovm-shopify-select", shSnaps, s.shopifyId);
@@ -2956,7 +2955,7 @@ function renderOwnedVsMarket() {
   if (exSnap) {
     var stores = aggregateExternalByStore(exSnap.products, s.storeGroupByParent);
     storeSel.innerHTML = '<option value="all">All external stores</option>' +
-      stores.map(function(st){return '<option value="' + st.store + '" ' + (st.store === s.storeFilter ? "selected" : "") + '>' + st.store + ' (' + fmt$(st.rev) + ')</option>';}).join("");
+      stores.map(function(st){return '<option value="' + H(st.store) + '" ' + (st.store === s.storeFilter ? "selected" : "") + '>' + H(st.store) + ' (' + fmt$(st.rev) + ')</option>';}).join("");
   } else {
     storeSel.innerHTML = '<option value="all">All external stores</option>';
   }
@@ -2972,11 +2971,11 @@ function renderOwnedVsMarket() {
   document.getElementById("ovm-empty").style.display = "none";
 
   var parts = [];
-  if (data.am) parts.push('Amazon <strong>' + data.am.label + '</strong>');
-  if (data.sh) parts.push('Shopify <strong>' + data.sh.label + '</strong>');
+  if (data.am) parts.push('Amazon <strong>' + H(data.am.label) + '</strong>');
+  if (data.sh) parts.push('Shopify <strong>' + H(data.sh.label) + '</strong>');
   var mkt = (s.storeFilter && s.storeFilter !== "all")
-    ? '<strong>' + s.storeFilter + '</strong> (' + data.ex.label + ')'
-    : 'Market <strong>' + data.ex.label + '</strong>';
+    ? '<strong>' + H(s.storeFilter) + '</strong> (' + H(data.ex.label) + ')'
+    : 'Market <strong>' + H(data.ex.label) + '</strong>';
   parts.push("vs " + mkt);
   document.getElementById("ovm-banner").innerHTML = parts.join(" + ");
 
@@ -3039,12 +3038,12 @@ function renderOwnedVsMarket() {
     return '<th class="' + (c.num ? "num" : "") + '" data-ovm-sort="' + i + '">' + c.label + (i === ss.col ? (ss.dir === "asc" ? " ▲" : " ▼") : "") + '</th>';
   }).join("");
   document.getElementById("ovm-tbody").innerHTML = filtered.map(function(r){
-    var typeBadge = r.type ? '<span class="badge type-' + r.type.toLowerCase().replace(/\s/g, "") + '">' + r.type + '</span>' : "";
+    var typeBadge = r.type ? '<span class="badge type-' + String(r.type).toLowerCase().replace(/[^a-z]/g, "") + '">' + H(r.type) + '</span>' : "";
     var isSelected = state.ovm.drillGenus === r.genus;
     var rowStyle = isSelected ? ' style="background:#e8f5e9;font-weight:600"' : '';
-    return '<tr class="clickable" data-drill-genus="' + r.genus.replace(/"/g,'&quot;') + '"' + rowStyle + '>' + cols.map(function(c){
+    return '<tr class="clickable" data-drill-genus="' + H(r.genus) + '"' + rowStyle + '>' + cols.map(function(c){
       if (c.k === "type") return "<td>" + typeBadge + "</td>";
-      return '<td class="' + (c.num ? "num" : "") + '">' + (c.fmt ? c.fmt(r[c.k] || 0) : (r[c.k] || "")) + '</td>';
+      return '<td class="' + (c.num ? "num" : "") + '">' + (c.fmt ? c.fmt(r[c.k] || 0) : H(r[c.k] || "")) + '</td>';
     }).join("") + "</tr>";
   }).join("");
   document.getElementById("ovm-count").textContent = filtered.length + " genera";
@@ -3088,7 +3087,7 @@ function setupOwnedVsMarketHandlers() {
   });
   document.getElementById("ovm-preset-amazon").addEventListener("click", function(){
     state.ovm.storeGroupByParent = false;
-    state.ovm.storeFilter = "Amazon (MCG)";
+    state.ovm.storeFilter = marketplaceStoreName() || "all";
     renderOwnedVsMarket();
   });
   document.getElementById("ovm-preset-all").addEventListener("click", function(){
@@ -3117,12 +3116,12 @@ function downloadOwnedVsMarket() {
   var rows = data.rows.map(function(r){
     return {
       Genus: r.genus, Type: r.type,
-      "Your Amazon": r.amazon.toFixed(2),
-      "Your Shopify": r.shopify.toFixed(2),
-      "Your Total": r.yourRev.toFixed(2),
+      "Your Amazon": num2(r.amazon),
+      "Your Shopify": num2(r.shopify),
+      "Your Total": num2(r.yourRev),
       "Market Units": r.mktUnits,
-      "Market Rev (est.)": r.mktRev.toFixed(2),
-      "Market Share": (r.marketShare * 100).toFixed(1) + "%",
+      "Market Rev (est.)": num2(r.mktRev),
+      "Market Share (%)": num2(r.marketShare * 100, 1),
       Status: r.status
     };
   });
@@ -3299,17 +3298,17 @@ function renderPlantOpportunities() {
     return '<th class="' + (c.num ? "num" : "") + '" data-plant-sort="' + i + '">' + c.label + (i === ss.col ? (ss.dir === "asc" ? " ▲" : " ▼") : "") + '</th>';
   }).join("");
   document.getElementById("oppmap-plant-tbody").innerHTML = filtered.slice(0, 500).map(function(r){
-    var typeBadge = r.type ? '<span class="badge type-' + r.type.toLowerCase().replace(/\s/g, "") + '">' + r.type + '</span>' : "";
+    var typeBadge = r.type ? '<span class="badge type-' + String(r.type).toLowerCase().replace(/[^a-z]/g, "") + '">' + H(r.type) + '</span>' : "";
     var restricted = (typeof isRestricted === "function") && isRestricted(r.sku, r.title);
     var statusBadge;
-    if (restricted) statusBadge = '<span class="badge restricted" title="On MCG exclusion list — you cannot sell this">🚫 can\'t sell</span>';
+    if (restricted) statusBadge = '<span class="badge restricted" title="On the restricted-items list — you cannot sell this">🚫 can\'t sell</span>';
     else if (r.status === "missing") statusBadge = '<span class="badge sig-red">🔴 not found</span>';
-    else statusBadge = '<span class="badge sig-green">🟢 ' + (r.yourSources || "yes") + '</span>';
+    else statusBadge = '<span class="badge sig-green">🟢 ' + H(r.yourSources || "yes") + '</span>';
     var rowCls = restricted ? "restricted-row" : "";
     return '<tr class="' + rowCls + '">' + cols.map(function(c){
       if (c.k === "type") return "<td>" + typeBadge + "</td>";
       if (c.k === "status") return "<td>" + statusBadge + "</td>";
-      return '<td class="' + (c.num ? "num" : "") + '">' + (c.fmt ? c.fmt(r[c.k] || 0) : (r[c.k] || "")) + '</td>';
+      return '<td class="' + (c.num ? "num" : "") + '">' + (c.fmt ? c.fmt(r[c.k] || 0) : H(r[c.k] || "")) + '</td>';
     }).join("") + "</tr>";
   }).join("");
   document.getElementById("oppmap-plant-count").textContent = filtered.length + " plants";
@@ -3327,19 +3326,12 @@ function downloadPlantOpportunities() {
   var rows = computePlantOpportunities();
   if (!rows) return;
   var filtered = rows.filter(function(r){return r.mktUnits >= state.oppmap.plantThreshold;});
-  var csv = "Plant,SKU,Genus,Type,Market Units,Market Rev (est.),Market Orders,Stores,You Sell It,Your Sources,Your Units,Your Rev,Status,Signal\n" +
-    filtered.map(function(r){
-      var esc = function(v){var s=String(v==null?"":v);return s.indexOf(",")>=0||s.indexOf('"')>=0 ? '"'+s.replace(/"/g,'""')+'"' : s;};
-      return [esc(r.title), esc(r.sku), esc(r.genus), esc(r.type),
-        r.mktUnits, r.mktRev.toFixed(2), r.mktOrders, r.mktStores,
-        r.status === "both" ? "yes" : "no", esc(r.yourSources), r.yourUnits, r.yourRev.toFixed(2),
-        r.status, r.signal].join(",");
-    }).join("\n");
-  var blob = new Blob([csv], {type: "text/csv"});
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement("a");
-  a.href = url; a.download = "plant-opportunities.csv"; a.click();
-  URL.revokeObjectURL(url);
+  sbDownloadCsv("plant-opportunities.csv",
+    [["Plant", "SKU", "Genus", "Type", "Market Units", "Market Rev (est.)", "Market Orders", "Stores", "You Sell It", "Your Sources", "Your Units", "Your Rev", "Status", "Signal"]]
+    .concat(filtered.map(function(r){
+      return [r.title, r.sku, r.genus, r.type, r.mktUnits, r.mktRev.toFixed(2), r.mktOrders, r.mktStores,
+        r.status === "both" ? "yes" : "no", r.yourSources, r.yourUnits, r.yourRev.toFixed(2), r.status, r.signal];
+    })));
 }
 
 function setupPlantOppHandlers() {
@@ -3613,14 +3605,14 @@ function renderOvmPlantPanel() {
   });
   else if (s.plantFilter === "carried-nosales") {
     // Only rows where SB carries but had 0 sales this period.
-    // Signal: r.status === "missing" AND MCG data says NOT sbOos and NOT mcgOnly.
-    var mcgReady = (typeof MCG_STATE !== "undefined") && !!MCG_STATE.data;
-    if (!mcgReady) filtered = [];
+    // Signal: r.status === "missing" AND tracker data says NOT sbOos and NOT supplierOnly.
+    var trackerReady = (typeof TRACKER_STATE !== "undefined") && !!TRACKER_STATE.data;
+    if (!trackerReady) filtered = [];
     else filtered = filtered.filter(function(r){
       if (r.status !== "missing") return false;
       if (typeof isRestricted === "function" && isRestricted(r.sku, r.title)) return false;
-      var hit = (typeof mcgFindMatch === "function") ? mcgFindMatch(r.sku, r.title) : null;
-      // "carried but 0 sales" = missing from sales AND not flagged by MCG tracker as OOS or not-in-SB
+      var hit = (typeof trackerFindMatch === "function") ? trackerFindMatch(r.sku, r.title) : null;
+      // "carried but 0 sales" = missing from sales AND not flagged by the stock tracker as OOS or not-in-SB
       return !hit;
     });
   }
@@ -3643,7 +3635,7 @@ function renderOvmPlantPanel() {
   // Reflect drill state in the count pill
   var pillEl = document.getElementById("ovm-plant-count");
   if (drill) {
-    pillEl.innerHTML = filtered.length + ' items in <strong style="color:#2e7d32">' + drill + '</strong> <button class="tab danger" id="ovm-plant-clear-drill" style="margin-left:8px;padding:2px 8px">Clear</button>';
+    pillEl.innerHTML = filtered.length + ' items in <strong style="color:#2e7d32">' + H(drill) + '</strong> <button class="tab danger" id="ovm-plant-clear-drill" style="margin-left:8px;padding:2px 8px">Clear</button>';
     setTimeout(function(){
       var btn = document.getElementById("ovm-plant-clear-drill");
       if (btn) btn.addEventListener("click", function(){
@@ -3669,29 +3661,29 @@ function renderOvmPlantPanel() {
     return '<th class="' + (c.num?"num":"") + '" data-ovm-plant-sort="' + i + '">' + c.label + arrow + '</th>';
   }).join("");
   tbody.innerHTML = filtered.slice(0, 500).map(function(r){
-    var typeBadge = r.type ? '<span class="badge type-' + r.type.toLowerCase().replace(/[\s\/]/g,"") + '">' + r.type + '</span>' : "";
+    var typeBadge = r.type ? '<span class="badge type-' + String(r.type).toLowerCase().replace(/[^a-z]/g,"") + '">' + H(r.type) + '</span>' : "";
     var restricted = (typeof isRestricted === "function") && isRestricted(r.sku, r.title);
-    var mcgHit = (typeof mcgFindMatch === "function") ? mcgFindMatch(r.sku, r.title) : null;
+    var trackerHit = (typeof trackerFindMatch === "function") ? trackerFindMatch(r.sku, r.title) : null;
     var statusBadge;
-    var mismatchTag = (mcgHit && mcgHit.skuMismatch) ? ' <span class="badge sig-yellow" title="Title matches but SKUs differ (your ' + (mcgHit.yourSku || "?") + ' vs MCG ' + (mcgHit.theirSku || "?") + ') — possible duplicate SKU / variant confusion">⚠ SKU mismatch</span>' : '';
-    var mcgLoaded = (typeof MCG_STATE !== "undefined") && !!MCG_STATE.data;
+    var mismatchTag = (trackerHit && trackerHit.skuMismatch) ? ' <span class="badge sig-yellow" title="Title matches but SKUs differ (your ' + H(trackerHit.yourSku || "?") + ' vs supplier ' + H(trackerHit.theirSku || "?") + ') — possible duplicate SKU / variant confusion">⚠ SKU mismatch</span>' : '';
+    var trackerLoaded = (typeof TRACKER_STATE !== "undefined") && !!TRACKER_STATE.data;
     // "SKU mismatch" tag: catalog title matches but SKUs differ AND owned had 0 sales →
     // suggests the SKU on your listing might be wrong / needs updating.
     var skuTag = r.skuMismatchFlag
-      ? ' <span class="badge sig-yellow" title="Title matches SB catalog but SKU differs (yours: ' + (r.yourSkus||[]).join(", ") + ' vs market: ' + (r.sku||"?") + '). 0 sales suggests SKU may be wrong on the listing.">⚠ check SKU</span>'
+      ? ' <span class="badge sig-yellow" title="Title matches SB catalog but SKU differs (yours: ' + H((r.yourSkus||[]).join(", ")) + ' vs market: ' + H(r.sku||"?") + '). 0 sales suggests SKU may be wrong on the listing.">⚠ check SKU</span>'
       : '';
     if (restricted) {
-      statusBadge = '<span class="badge restricted" title="On MCG exclusion list — you cannot sell this">🚫 can\'t sell</span>';
+      statusBadge = '<span class="badge restricted" title="On the restricted-items list — you cannot sell this">🚫 can\'t sell</span>';
     } else if (r.status !== "missing") {
-      statusBadge = '<span class="badge sig-green">🟢 sold on ' + (r.yourSources || "yes") + '</span>' + mismatchTag;
+      statusBadge = '<span class="badge sig-green">🟢 sold on ' + H(r.yourSources || "yes") + '</span>' + mismatchTag;
     } else if (r.skuMismatchFlag) {
       // Catalog match but 0 sales + SKU mismatch — actionable listing issue
-      statusBadge = '<span class="badge sig-orange" title="Your catalog has this title (SKU ' + (r.yourSkus||[]).join(", ") + ') but the market SKU is ' + (r.sku||"?") + '. Check if listing SKU needs updating.">🟠 SKU mismatch — 0 sales</span>';
-    } else if (mcgHit && mcgHit.status === "sbOos") {
+      statusBadge = '<span class="badge sig-orange" title="Your catalog has this title (SKU ' + H((r.yourSkus||[]).join(", ")) + ') but the market SKU is ' + H(r.sku||"?") + '. Check if listing SKU needs updating.">🟠 SKU mismatch — 0 sales</span>';
+    } else if (trackerHit && trackerHit.status === "sbOos") {
       statusBadge = '<span class="badge sig-orange" title="You carry this but SB is out of stock — turn on!">🟠 SB OOS — turn on</span>' + mismatchTag;
-    } else if (mcgHit && mcgHit.status === "mcgOnly") {
+    } else if (trackerHit && trackerHit.status === "supplierOnly") {
       statusBadge = '<span class="badge sig-red">🔴 not carried by SB</span>' + mismatchTag;
-    } else if (mcgLoaded) {
+    } else if (trackerLoaded) {
       statusBadge = '<span class="badge sig-yellow" title="SB carries this and it is in stock — just no sales this period">🟡 carried, 0 sales</span>';
     } else {
       statusBadge = '<span class="badge sig-red">🔴 not found</span>';
@@ -3702,7 +3694,7 @@ function renderOvmPlantPanel() {
     return '<tr class="' + rowCls + '">' + cols.map(function(c){
       if (c.k === "type") return "<td>" + typeBadge + "</td>";
       if (c.k === "status") return "<td>" + statusBadge + "</td>";
-      return '<td class="' + (c.num?"num":"") + '">' + (c.fmt ? c.fmt(r[c.k] || 0) : (r[c.k] || "")) + '</td>';
+      return '<td class="' + (c.num?"num":"") + '">' + (c.fmt ? c.fmt(r[c.k] || 0) : H(r[c.k] || "")) + '</td>';
     }).join("") + "</tr>";
   }).join("");
   // Wire header clicks for sort toggle
@@ -3802,7 +3794,7 @@ function renderCrossPlantPanel() {
     return '<th class="' + (c.num?"num":"") + '" data-cross-plant-sort="' + i + '">' + c.label + arrow + '</th>';
   }).join("");
   tbody.innerHTML = filtered.slice(0, 500).map(function(r){
-    var typeBadge = r.type ? '<span class="badge type-' + r.type.toLowerCase().replace(/[\s\/]/g,"") + '">' + r.type + '</span>' : "";
+    var typeBadge = r.type ? '<span class="badge type-' + String(r.type).toLowerCase().replace(/[^a-z]/g,"") + '">' + H(r.type) + '</span>' : "";
     var prefBadge;
     if (r.status === "amazon-only") prefBadge = '<span class="badge amazon">Amazon only</span>';
     else if (r.status === "shopify-only") prefBadge = '<span class="badge shopify">Shopify only</span>';
@@ -3810,7 +3802,7 @@ function renderCrossPlantPanel() {
     return "<tr>" + cols.map(function(c){
       if (c.k === "type") return "<td>" + typeBadge + "</td>";
       if (c.k === "status") return "<td>" + prefBadge + "</td>";
-      return '<td class="' + (c.num?"num":"") + '">' + (c.fmt ? c.fmt(r[c.k] || 0) : (r[c.k] || "")) + '</td>';
+      return '<td class="' + (c.num?"num":"") + '">' + (c.fmt ? c.fmt(r[c.k] || 0) : H(r[c.k] || "")) + '</td>';
     }).join("") + "</tr>";
   }).join("");
   thead.querySelectorAll("[data-cross-plant-sort]").forEach(function(th){
@@ -3865,56 +3857,45 @@ function setupExtraSkuHandlers() {
   }
 }
 // ============================================================
-// MCG TRACKER INTEGRATION
-// Fetches live "SB out of stock" + "Not in SB" data from sb-mcg-check.netlify.app
+// STOCK TRACKER INTEGRATION
+// Fetches live "SB out of stock" + "Not in SB" data from the stock tracker app
+// (through the signed-in endpoint /api/stock-tracker).
 // ============================================================
-var MCG_STATE = { token: null, tokenExpires: 0, data: null, fetchedAt: 0, error: null, loading: false };
-var MCG_CACHE_KEY = "sb-mcg-tracker-cache-v1";
-var MCG_CACHE_TTL_MS = 60 * 60 * 1000;  // 1 hour local cache
+var TRACKER_STATE = { token: null, tokenExpires: 0, data: null, fetchedAt: 0, error: null, loading: false };
+var TRACKER_CACHE_KEY = "sb-stock-tracker-cache-v1";
+var TRACKER_CACHE_TTL_MS = 60 * 60 * 1000;  // 1 hour local cache
 
-function mcgConfig() {
-  var pwdMeta = document.querySelector('meta[name="sb-mcg-password"]');
-  var urlMeta = document.querySelector('meta[name="sb-mcg-url"]');
-  return {
-    password: pwdMeta ? pwdMeta.content : "",
-    baseUrl: urlMeta ? urlMeta.content : "https://sb-mcg-check.netlify.app"
-  };
-}
+// The tracker's password stays on the server: the page asks the same-origin
+// endpoint /api/stock-tracker, which checks the sign-in session.
+function trackerConfig() { return { endpoint: "/api/stock-tracker" }; }
+function trackerSignedIn() { return !!(window.SBAuth && window.SBAuth.isSignedIn()); }
 
-function mcgLoadCache() {
+// Cached for this browser tab only (sessionStorage), while signed in; wiped at
+// sign-out or expiry (auth-view.js).
+function trackerLoadCache() {
+  if (!trackerSignedIn()) return null;
   try {
-    var raw = localStorage.getItem(MCG_CACHE_KEY);
+    var raw = sessionStorage.getItem(TRACKER_CACHE_KEY);
     if (!raw) return null;
     var d = JSON.parse(raw);
-    if (Date.now() - d.fetchedAt > MCG_CACHE_TTL_MS) return null;
+    if (Date.now() - d.fetchedAt > TRACKER_CACHE_TTL_MS) return null;
     return d;
   } catch(_) { return null; }
 }
-function mcgSaveCache(data) {
-  try { localStorage.setItem(MCG_CACHE_KEY, JSON.stringify({data: data, fetchedAt: Date.now()})); } catch(_){}
+function trackerSaveCache(data) {
+  try { sessionStorage.setItem(TRACKER_CACHE_KEY, JSON.stringify({data: data, fetchedAt: Date.now()})); } catch(_){}
 }
 
-// Build endpoint URL — supports both same-origin proxy path (/api/mcg) and full external URL
-function mcgEndpoint(cfg, name) {
-  var base = cfg.baseUrl || "";
-  // If baseUrl is the external sb-mcg-check URL, keep the /.netlify/functions/ prefix.
-  // If it's the same-origin edge-proxy path (/api/mcg), the redirect already handles the prefix.
-  if (base.indexOf("netlify.app") >= 0) return base + "/.netlify/functions/" + name;
-  return base + "/" + name;
-}
-
-
-
-// Build a lookup by SKU (normalized) into "sbOos" or "mcgOnly"
-function mcgSkuLookup() {
+// Build a lookup by SKU (normalized) into "sbOos" or "supplierOnly"
+function trackerSkuLookup() {
   var lu = {};
-  if (!MCG_STATE.data) return lu;
+  if (!TRACKER_STATE.data) return lu;
   var norm = function(s) { return String(s || "").toUpperCase().trim(); };
-  (MCG_STATE.data.sbOos || []).forEach(function(x) {
+  (TRACKER_STATE.data.sbOos || []).forEach(function(x) {
     if (x.sku) lu[norm(x.sku)] = {status: "sbOos", name: x.name, url: x.url};
   });
-  (MCG_STATE.data.mcgOnly || []).forEach(function(x) {
-    if (x.sku) lu[norm(x.sku)] = {status: "mcgOnly", name: x.name, url: x.url};
+  (TRACKER_STATE.data.supplierOnly || []).forEach(function(x) {
+    if (x.sku) lu[norm(x.sku)] = {status: "supplierOnly", name: x.name, url: x.url};
   });
   return lu;
 }
@@ -3922,9 +3903,9 @@ function mcgSkuLookup() {
 // Fallback lookup by normalized title (covers SKU-variant mismatches like
 // "Frizzle Sizzle" S2KY2965 vs "Frizzle Sizzle [dormant]" S2KY5477).
 // Uses the same normPlantTitle + getMatchKeys as the OVM matcher.
-function mcgTitleLookup() {
+function trackerTitleLookup() {
   var lu = {};
-  if (!MCG_STATE.data || typeof getMatchKeys !== "function") return lu;
+  if (!TRACKER_STATE.data || typeof getMatchKeys !== "function") return lu;
   var add = function(x, status) {
     if (!x.name) return;
     var keys = getMatchKeys(x.name);
@@ -3933,17 +3914,17 @@ function mcgTitleLookup() {
       if (k && k.length >= 4 && !lu[k]) lu[k] = {status: status, name: x.name, url: x.url, sku: x.sku};
     }
   };
-  (MCG_STATE.data.sbOos || []).forEach(function(x) { add(x, "sbOos"); });
-  (MCG_STATE.data.mcgOnly || []).forEach(function(x) { add(x, "mcgOnly"); });
+  (TRACKER_STATE.data.sbOos || []).forEach(function(x) { add(x, "sbOos"); });
+  (TRACKER_STATE.data.supplierOnly || []).forEach(function(x) { add(x, "supplierOnly"); });
   return lu;
 }
 
 
 // Combined lookup: try SKU first, then title fallback.
 // Adds skuMismatch:true when title matches but SKUs differ (variant mix-up flag).
-function mcgFindMatch(sku, title) {
-  if (!MCG_STATE.data) return null;
-  var skuLU = mcgSkuLookup();
+function trackerFindMatch(sku, title) {
+  if (!TRACKER_STATE.data) return null;
+  var skuLU = trackerSkuLookup();
   var s = String(sku || "").toUpperCase().trim();
   if (s) {
     if (skuLU[s]) return skuLU[s];
@@ -3952,7 +3933,7 @@ function mcgFindMatch(sku, title) {
     }
   }
   if (title && typeof getMatchKeys === "function") {
-    var titleLU = mcgTitleLookup();
+    var titleLU = trackerTitleLookup();
     var keys = getMatchKeys(title);
     for (var i = 0; i < keys.length; i++) {
       var hit = titleLU[keys[i]];
@@ -3968,96 +3949,83 @@ function mcgFindMatch(sku, title) {
   return null;
 }
 
-async function mcgAuth() {
-  var cfg = mcgConfig();
-  if (!cfg.password) throw new Error("MCG password not configured");
-  var res = await fetch(mcgEndpoint(cfg, "auth"), {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({password: cfg.password})
-  });
-  var j = await res.json();
-  if (!res.ok || !j.token) throw new Error("MCG auth failed: " + (j.error || res.status));
-  MCG_STATE.token = j.token;
-  MCG_STATE.tokenExpires = Date.now() + 7 * 60 * 60 * 1000;
-  return j.token;
-}
-
-async function mcgFetch(forceRefresh) {
+async function trackerFetch(forceRefresh) {
   if (!forceRefresh) {
-    var cached = mcgLoadCache();
-    if (cached) { MCG_STATE.data = cached.data; MCG_STATE.fetchedAt = cached.fetchedAt; return cached.data; }
+    var cached = trackerLoadCache();
+    if (cached) { TRACKER_STATE.data = cached.data; TRACKER_STATE.fetchedAt = cached.fetchedAt; return cached.data; }
   }
-  var cfg = mcgConfig();
-  if (!cfg.password) { MCG_STATE.error = "not configured"; return null; }
-  MCG_STATE.loading = true;
-  MCG_STATE.error = null;
+  if (!trackerSignedIn()) { TRACKER_STATE.error = "sign in first"; return null; }
+  TRACKER_STATE.loading = true;
+  TRACKER_STATE.error = null;
   try {
-    if (!MCG_STATE.token || Date.now() > MCG_STATE.tokenExpires) await mcgAuth();
-    var url = mcgEndpoint(cfg, "scrape") + (forceRefresh ? "?refresh=true" : "");
-    var res = await fetch(url, {headers: {"Authorization": "Bearer " + MCG_STATE.token}});
-    if (res.status === 401) {
-      await mcgAuth();
-      res = await fetch(url, {headers: {"Authorization": "Bearer " + MCG_STATE.token}});
-    }
-    if (!res.ok) throw new Error("MCG scrape failed: " + res.status);
-    var j = await res.json();
-    MCG_STATE.data = j;
-    MCG_STATE.fetchedAt = Date.now();
-    mcgSaveCache(j);
+    // Session-bound call: an answer that arrives after sign-out is discarded.
+    var r = await window.SBAuth.fetchJson(trackerConfig().endpoint + (forceRefresh ? "?refresh=1" : ""), { headers: { accept: "application/json" } });
+    if (r.status === 503) throw new Error("not configured on the server");
+    if (r.status !== 200 || !r.body) throw new Error("tracker unavailable (" + r.status + ")");
+    var j = r.body;
+    TRACKER_STATE.data = j;
+    TRACKER_STATE.fetchedAt = Date.now();
+    trackerSaveCache(j);
     return j;
   } catch(e) {
-    MCG_STATE.error = e.message || String(e);
-    console.warn("MCG tracker fetch error:", e);
+    TRACKER_STATE.error = e.message || String(e);
+    console.warn("Stock tracker fetch error:", TRACKER_STATE.error);
     return null;
   } finally {
-    MCG_STATE.loading = false;
+    TRACKER_STATE.loading = false;
   }
 }
 
-function mcgAutoLoad() {
-  var cached = mcgLoadCache();
+function trackerAutoLoad() {
+  if (!trackerSignedIn()) return;   // runs again when a session starts
+  var cached = trackerLoadCache();
   if (cached) {
-    MCG_STATE.data = cached.data;
-    MCG_STATE.fetchedAt = cached.fetchedAt;
+    TRACKER_STATE.data = cached.data;
+    TRACKER_STATE.fetchedAt = cached.fetchedAt;
     if (Date.now() - cached.fetchedAt > 30 * 60 * 1000) {
-      mcgFetch(false).then(function(){ if (typeof renderTab === "function") renderTab(activeTab); });
+      trackerFetch(false).then(function(){ if (typeof renderTab === "function") renderTab(activeTab); });
     }
     return;
   }
-  var cfg = mcgConfig();
-  if (cfg.password) {
-    mcgFetch(false).then(function(){ if (typeof renderTab === "function") renderTab(activeTab); });
+  if (trackerSignedIn()) {
+    trackerFetch(false).then(function(){ if (typeof renderTab === "function") renderTab(activeTab); });
   }
 }
 
-function renderMcgStatus() {
-  var el = document.getElementById("ovm-mcg-status");
+function renderTrackerStatus() {
+  var el = document.getElementById("ovm-tracker-status");
   if (!el) return;
-  var cfg = mcgConfig();
-  if (!cfg.password) { el.innerHTML = "MCG Tracker: no password"; return; }
-  if (MCG_STATE.loading) { el.innerHTML = "MCG Tracker: loading..."; return; }
-  if (MCG_STATE.error) { el.innerHTML = "MCG Tracker error: " + MCG_STATE.error; return; }
-  if (MCG_STATE.data) {
-    var m = (MCG_STATE.data.mcgOnly || []).length;
-    var o = (MCG_STATE.data.sbOos || []).length;
-    var age = Math.round((Date.now() - MCG_STATE.fetchedAt) / 60000);
-    el.innerHTML = "MCG Tracker: " + o + " SB OOS, " + m + " not in SB (" + age + "min ago)";
+  if (!trackerSignedIn()) { el.textContent = "Stock tracker: sign in to load"; return; }
+  if (TRACKER_STATE.loading) { el.textContent = "Stock tracker: loading..."; return; }
+  if (TRACKER_STATE.error) { el.textContent = "Stock tracker error: " + TRACKER_STATE.error; return; }
+  if (TRACKER_STATE.data) {
+    var m = (TRACKER_STATE.data.supplierOnly || []).length;
+    var o = (TRACKER_STATE.data.sbOos || []).length;
+    var age = Math.round((Date.now() - TRACKER_STATE.fetchedAt) / 60000);
+    el.textContent = "Stock tracker: " + o + " SB OOS, " + m + " not in SB (" + age + "min ago)";
   } else {
-    el.innerHTML = "MCG Tracker: click button to load";
+    el.textContent = "Stock tracker: click button to load";
   }
 }
 
-function setupMcgHandlers() {
-  var btn = document.getElementById("ovm-mcg-refresh");
+function trackerForget() {
+  TRACKER_STATE.data = null; TRACKER_STATE.fetchedAt = 0; TRACKER_STATE.error = null; TRACKER_STATE.loading = false;
+  try { sessionStorage.removeItem(TRACKER_CACHE_KEY); } catch (_) {}
+}
+function setupTrackerHandlers() {
+  if (window.SBAuth) {
+    window.SBAuth.onWipe(trackerForget);
+    window.SBAuth.onChange(function (a) { if (a.isSignedIn() && !TRACKER_STATE.data) trackerAutoLoad(); });
+  }
+  var btn = document.getElementById("ovm-tracker-refresh");
   if (!btn) return;
   btn.addEventListener("click", async function() {
-    renderMcgStatus();
-    await mcgFetch(true);
-    renderMcgStatus();
+    renderTrackerStatus();
+    await trackerFetch(true);
+    renderTrackerStatus();
     if (typeof renderTab === "function") renderTab(activeTab);
   });
-  renderMcgStatus();
+  renderTrackerStatus();
 }
 
 (function(){
@@ -4065,7 +4033,7 @@ function setupMcgHandlers() {
   if (typeof orig === "function") {
     window.renderOwnedVsMarket = function() {
       var r = orig.apply(this, arguments);
-      renderMcgStatus();
+      renderTrackerStatus();
       return r;
     };
   }
@@ -4088,48 +4056,35 @@ function downloadOvmPlants() {
   else if (s.plantFilter === "nonplant") filtered = filtered.filter(function(r){return !r.isPlant;});
   else if (s.plantFilter === "restricted") filtered = filtered.filter(function(r){return typeof isRestricted === "function" && isRestricted(r.sku, r.title);});
   else if (s.plantFilter === "carried-nosales") {
-    var mcgReady = (typeof MCG_STATE !== "undefined") && !!MCG_STATE.data;
-    if (!mcgReady) filtered = [];
+    var trackerReady = (typeof TRACKER_STATE !== "undefined") && !!TRACKER_STATE.data;
+    if (!trackerReady) filtered = [];
     else filtered = filtered.filter(function(r){
       if (r.status !== "missing") return false;
       if (typeof isRestricted === "function" && isRestricted(r.sku, r.title)) return false;
-      var hit = (typeof mcgFindMatch === "function") ? mcgFindMatch(r.sku, r.title) : null;
+      var hit = (typeof trackerFindMatch === "function") ? trackerFindMatch(r.sku, r.title) : null;
       return !hit;
     });
   }
   if (search) filtered = filtered.filter(function(r){return (r.title||"").toLowerCase().indexOf(search)>=0 || (r.sku||"").toLowerCase().indexOf(search)>=0;});
   function statusLabel(r) {
     var restricted = (typeof isRestricted === "function") && isRestricted(r.sku, r.title);
-    var mcgHit = (typeof mcgFindMatch === "function") ? mcgFindMatch(r.sku, r.title) : null;
-    var mcgLoaded = (typeof MCG_STATE !== "undefined") && !!MCG_STATE.data;
+    var trackerHit = (typeof trackerFindMatch === "function") ? trackerFindMatch(r.sku, r.title) : null;
+    var trackerLoaded = (typeof TRACKER_STATE !== "undefined") && !!TRACKER_STATE.data;
     if (restricted) return "can't sell (exclusion)";
     if (r.status !== "missing") return "sold on " + (r.yourSources || "yes");
-    if (mcgHit && mcgHit.status === "sbOos") return "SB out of stock - turn on";
-    if (mcgHit && mcgHit.status === "mcgOnly") return "not carried by SB";
-    if (mcgLoaded) return "carried, 0 sales";
+    if (trackerHit && trackerHit.status === "sbOos") return "SB out of stock - turn on";
+    if (trackerHit && trackerHit.status === "supplierOnly") return "not carried by SB";
+    if (trackerLoaded) return "carried, 0 sales";
     return "not found";
   }
-  var esc = function(v){var s=String(v==null?"":v);return s.indexOf(",")>=0||s.indexOf('"')>=0||s.indexOf("\n")>=0 ? '"'+s.replace(/"/g,'""')+'"' : s;};
-  var header = "Plant,SKU,Genus,Type,Market Units,Market Rev (est.),Market Orders,Market Stores,Status,Your Units,Your Rev,Your Sources\n";
-  var body = filtered.map(function(r){
-    return [
-      esc(r.title), esc(r.sku), esc(r.genus), esc(r.type),
-      r.mktUnits, r.mktRev.toFixed(2), r.mktOrders || 0, r.mktStores || 0,
-      esc(statusLabel(r)),
-      r.yourUnits || 0, (r.yourRev || 0).toFixed(2),
-      esc(r.yourSources || "")
-    ].join(",");
-  }).join("\n");
-  var csv = header + body;
-  var blob = new Blob([csv], {type: "text/csv"});
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement("a");
-  var suffix = drill ? "-" + drill : "";
+  var suffix = drill ? "-" + String(drill).replace(/[^a-zA-Z0-9]/g, "_") : "";
   var filterTag = s.plantFilter !== "all" ? "-" + s.plantFilter : "";
-  a.href = url;
-  a.download = "ovm-plants" + suffix + filterTag + ".csv";
-  a.click();
-  URL.revokeObjectURL(url);
+  sbDownloadCsv("ovm-plants" + suffix + filterTag + ".csv",
+    [["Plant", "SKU", "Genus", "Type", "Market Units", "Market Rev (est.)", "Market Orders", "Market Stores", "Status", "Your Units", "Your Rev", "Your Sources"]]
+    .concat(filtered.map(function(r){
+      return [r.title, r.sku, r.genus, r.type, r.mktUnits, r.mktRev.toFixed(2), r.mktOrders || 0, r.mktStores || 0,
+        statusLabel(r), r.yourUnits || 0, (r.yourRev || 0).toFixed(2), r.yourSources || ""];
+    })));
 }
 (function(){
   var btn = document.getElementById("ovm-plant-download");
@@ -4282,24 +4237,11 @@ function downloadExternalDrill() {
   if (!g) { alert("Genus not found in current snapshot."); return; }
   var search = (document.getElementById("external-prod-search").value || "").toLowerCase();
   var byTitle = aggregateExternalByPlant(g.items).filter(function(p){return !search || p.title.toLowerCase().indexOf(search) >= 0;});
-  var esc = function(v){var s=String(v==null?"":v);return s.indexOf(",")>=0||s.indexOf('"')>=0||s.indexOf("\n")>=0 ? '"'+s.replace(/"/g,'""')+'"' : s;};
-  var header = "Plant,SKU,Units,Est. Rev,Orders,Stores\n";
-  var body = byTitle.map(function(p){
-    return [
-      esc(p.title), esc(p.sku),
-      p.units, (p.estRev||0).toFixed(2),
-      p.orders, p.storeCount
-    ].join(",");
-  }).join("\n");
-  var csv = header + body;
-  var blob = new Blob([csv], {type: "text/csv"});
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement("a");
   var safe = s.drillGenus.replace(/[^a-zA-Z0-9]/g, "_");
-  a.href = url;
-  a.download = "external-" + safe + "-plants.csv";
-  a.click();
-  URL.revokeObjectURL(url);
+  sbDownloadCsv("external-" + safe + "-plants.csv",
+    [["Plant", "SKU", "Units", "Est. Rev", "Orders", "Stores"]].concat(byTitle.map(function(p){
+      return [p.title, p.sku, p.units, (p.estRev||0).toFixed(2), p.orders, p.storeCount];
+    })));
 }
 (function(){
   function wire() {

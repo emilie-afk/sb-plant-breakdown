@@ -11,10 +11,11 @@
 //      settings, manual file upload (fallback), backup and troubleshooting.
 //
 // Rules:
-//   - Keys are never in the source. A read-only key may be built into the
-//     password-protected page (SB_SHARED_URL / SB_SHARED_KEY at build time);
-//     otherwise a person enters a key once in Data settings, kept in this
-//     browser only.
+//   - No Worker key ever reaches the browser. Shared storage is reached only
+//     through the same-origin gateway (/api/v1/...), authorized by the
+//     server-signed session cookie (auth-view.js). Changes also carry the
+//     session's CSRF token; uploads and settings changes need an editor
+//     sign-in.
 //   - When a refresh or a collection fails, the last successful analysis stays
 //     on screen and the failure is shown above it.
 //   - Overlapping reports are never added together: only the newest
@@ -25,7 +26,6 @@
   "use strict";
   /* global state, snapshots, activeTab, BUI */
 
-  var CONN_KEY = "sb-shared-store-v1";
   var SETTINGS_VER_KEY = "sb-shared-settings-versions-v1";
   var STALE_KEY = "sb-shared-stale-days-v1";
   var STORE_TZ = "America/Los_Angeles";
@@ -35,18 +35,9 @@
   window.SBAutoLoad = AUTO;
 
   // ---- connection ---------------------------------------------
-  // A connection saved in this browser wins; otherwise the read-only
-  // connection built into the page (if the build provided one).
-  function builtInConn() {
-    var meta = function (n) { var el = document.querySelector('meta[name="' + n + '"]'); return el ? el.getAttribute("content") || "" : ""; };
-    var d = window.SB_SHARED_DEFAULT || { url: meta("sb-shared-url"), key: meta("sb-shared-key") };
-    if (!d || typeof d.url !== "string" || typeof d.key !== "string") return null;
-    if (/__SB_/.test(d.url + d.key) || !/^https?:\/\//.test(d.url) || d.key.length < 32) return null;
-    return { url: d.url, key: d.key, builtIn: true };
-  }
-  function savedConn() { try { return JSON.parse(localStorage.getItem(CONN_KEY) || "null"); } catch (e) { return null; } }
-  function loadConn() { return savedConn() || builtInConn(); }
-  function saveConn(c) { try { if (c) localStorage.setItem(CONN_KEY, JSON.stringify(c)); else localStorage.removeItem(CONN_KEY); } catch (e) {} }
+  // "Connected" means signed in: the session cookie is what authorizes the
+  // gateway. There is no address or key to enter.
+  function loadConn() { return window.SBAuth && window.SBAuth.isSignedIn() ? { session: true } : null; }
   function loadVers() { try { return JSON.parse(localStorage.getItem(SETTINGS_VER_KEY) || "{}"); } catch (e) { return {}; } }
   function saveVers(v) { try { localStorage.setItem(SETTINGS_VER_KEY, JSON.stringify(v)); } catch (e) {} }
   function staleDays() { var n = parseInt((function () { try { return localStorage.getItem(STALE_KEY); } catch (e) { return null; } })(), 10); return isNaN(n) ? 10 : n; }
@@ -54,24 +45,57 @@
   function when(iso) { return iso ? new Date(iso).toLocaleString() : "—"; }
 
   async function api(path, opts) {
-    var c = loadConn();
-    if (!c || !c.url || !c.key) throw new Error("Not connected. Enter the shared storage address and key in Data settings.");
+    if (!/^\/v1\//.test(path)) throw new Error("Unsupported request.");
+    if (!window.SBAuth) throw new Error("Signed out.");
     opts = opts || {};
-    var res;
+    var write = (opts.method || "GET") !== "GET";
+    var r;
     try {
-      res = await fetch(c.url.replace(/\/+$/, "") + path, {
+      // SBAuth.fetchJson: session-bound; an answer arriving after sign-out is discarded.
+      r = await window.SBAuth.fetchJson("/api" + path, {
         method: opts.method || "GET",
-        headers: Object.assign({ authorization: "Bearer " + c.key }, opts.body ? { "content-type": "application/json" } : {}),
+        headers: Object.assign({ accept: "application/json" }, opts.body ? { "content-type": "application/json" } : {},
+                               window.SBAuth.headers(write)),
         body: opts.body ? JSON.stringify(opts.body) : undefined
       });
     } catch (e) {
+      if (/^Signed out/.test(e.message || "")) throw e;
       throw new Error("Could not reach shared storage. (" + (e.message || e) + ")");
     }
-    var body = null; try { body = await res.json(); } catch (e) {}
-    if (res.status === 401) throw new Error("The shared-storage key was rejected.");
-    if (res.status === 403) throw new Error("This key is not allowed to do that (a read-only or collector key). Enter the dashboard key in Data settings.");
-    return { status: res.status, body: body || {} };
+    var body = r.body;
+    if (r.status === 403) throw new Error(body && body.error === "editor_only" ? "Only an editor sign-in can do that." : "Not allowed (" + ((body && body.error) || "forbidden") + ").");
+    if (r.status === 503) throw new Error("Shared storage is not configured on the server.");
+    return { status: r.status, body: body || {} };
   }
+
+  // ---- what came from shared storage ---------------------------
+  // Shared-derived snapshots (automatic copies, period views, market data,
+  // reports opened from shared storage) live in memory only: never written to
+  // browser storage, and wiped at sign-out or expiry. Reports the person
+  // uploaded by hand are kept (even after uploading them: meta.shared.linkedAt).
+  function isSharedDerived(x) {
+    var m = x && x.meta;
+    return !!(m && (m.auto || m.ephemeral || m.fromShared || (m.shared && !m.shared.linkedAt)));
+  }
+  window.sbIsSharedDerived = isSharedDerived;
+  function forgetShared() {
+    snapshots = snapshots.filter(function (x) { return !isSharedDerived(x); });
+    snapshots.forEach(function (x) { if (x.meta && x.meta.shared) delete x.meta.shared; });   // links to shared reports
+    ["shopify", "amazon", "external"].forEach(function (src) {
+      var st = state[src];
+      if (st && st.snapshotId && !snapshots.some(function (x) { return x.id === st.snapshotId; })) { st.snapshotId = null; st.compareId = null; st.mode = "single"; }
+    });
+    DI.reports = null; DI.runs = null; DI.history = null; DI.error = null; DI.results = {};
+    AUTO.status = "idle"; AUTO.error = null; AUTO.current = null; AUTO.fullMonth = null; AUTO.collection = null;
+    AUTO.marketCollection = null; AUTO.reports = null; AUTO.checkedAt = null; AUTO.userPicked = false;
+    window.SBVendorMap = null;
+    window.SBMarketConfig = null;
+    if (typeof window.setRestrictedItems === "function") window.setRestrictedItems(null);
+    if (window.SBOverrides && window.SBOverrides.setShared) window.SBOverrides.setShared(null, 0);
+    try { localStorage.removeItem(SETTINGS_VER_KEY); } catch (e) {}
+    if (typeof window.saveSnapshots === "function") window.saveSnapshots();
+  }
+  if (window.SBAuth) window.SBAuth.onWipe(forgetShared);
 
   // ---- shared report -> browser snapshot -----------------------
   function classifier() {
@@ -96,6 +120,7 @@
       amazonSnapshotIdentity: window.amazonSnapshotIdentity,
       classify: classifier()
     });
+    snap.meta.fromShared = true;
     if (rep.source === "shopify" && rep.report_scope === window.SHARED_SHOPIFY_SCOPE) {
       var info = window.sharedPeriodInfo(rep.period_start, rep.period_end);
       snap.label = info.label;
@@ -122,16 +147,21 @@
     return snap;
   }
 
-  // Period views (combined months, quarters, years) are rebuilt from shared
-  // storage whenever they are opened; they are never written to browser storage.
+  // Nothing from shared storage is written to browser storage (see
+  // isSharedDerived); copies an older version saved are dropped right away,
+  // before anything is rendered.
   var origSave = window.saveSnapshots;
   if (typeof origSave === "function" && !origSave._dsWrapped) {
     window.saveSnapshots = function () {
       var all = snapshots;
-      snapshots = all.filter(function (x) { return !(x.meta && x.meta.ephemeral); });
+      snapshots = all.filter(function (x) { return !isSharedDerived(x); });
       try { return origSave.apply(this, arguments); } finally { snapshots = all; }
     };
     window.saveSnapshots._dsWrapped = true;
+  }
+  if (snapshots.some(isSharedDerived)) {
+    snapshots = snapshots.filter(function (x) { return !isSharedDerived(x); });
+    window.saveSnapshots();
   }
   window.SBShared = { api: api, fetchRows: fetchRows, buildSnapshot: buildSnapshot, loadConn: loadConn,
                       renderStatus: function () { renderStatus(); }, openSettings: function (s) { openSettings(s); } };
@@ -148,6 +178,14 @@
         var vmS = (await api("/v1/settings/vendor_map")).body.setting;
         window.SBVendorMap = vmS ? { map: vmS.value, version: vmS.version, updatedAt: vmS.updatedAt } : null;
       } catch (ve) { console.warn("vendor map:", ve); }
+      // Private business configuration kept out of the public code: the
+      // restricted-items list and the market store grouping.
+      try {
+        var ri = (await api("/v1/settings/restricted_items")).body.setting;
+        if (typeof window.setRestrictedItems === "function") window.setRestrictedItems(ri && ri.value && ri.value.items);
+        var mc = (await api("/v1/settings/market_config")).body.setting;
+        window.SBMarketConfig = mc && mc.value ? mc.value : null;
+      } catch (pe) { console.warn("private configuration:", pe); }
       // Confirmed classification corrections, read-only, for every viewer.
       try {
         var so = (await api("/v1/settings/classification_overrides")).body.setting;
@@ -212,6 +250,14 @@
           : ' <span class="badge type-other">partial — incomplete coverage</span>') +
         ' <span class="small">· ' + esc(pp.name) + " · store dates, " + STORE_TZ + " · combined from " + pp.revisionsUsed.length +
         " monthly report" + (pp.revisionsUsed.length === 1 ? "" : "s") + "</span>";
+      // Which stored revision each month comes from, and when it was collected and imported.
+      var used = pp.revisionsUsed.map(function (u) {
+        var r = (AUTO.reports || []).filter(function (x) { return x.id === u.reportId; })[0];
+        if (!r) return null;
+        return esc(window.periodRangeText(r.period_start, r.period_end)) + ": Revision " + r.revision +
+          (r.collected_at ? " · collected " + esc(when(r.collected_at)) : "") + " · imported " + esc(when(r.activated_at || r.imported_at));
+      }).filter(Boolean);
+      if (used.length) head += '<div class="small">' + used.join("<br>") + "</div>";
     } else if (snap) {
       var info = snap.meta && snap.meta.current ? window.sharedPeriodInfo(snap.meta.current.start, snap.meta.current.end)
                                                 : window.sharedPeriodInfo(snap.startDate, snap.endDate);
@@ -234,7 +280,7 @@
       }
     } else if (AUTO.status === "loading") head = "Loading the latest saved Shopify report…";
     else if (AUTO.status === "none") head = "<b>No saved Shopify report yet.</b> Reports appear here automatically after the daily collection.";
-    else if (AUTO.status === "not_connected") head = "<b>Saved reports are not connected in this browser.</b> Open ⚙ Data settings (top right) to connect.";
+    else if (AUTO.status === "not_connected") head = "<b>Sign in to load saved reports.</b>";
     else head = "No Shopify report to show.";
     lines.push(head);
 
@@ -314,22 +360,16 @@
     if (c && DI.history) main.push(historyPanel());
     else if (c && DI.busy) main.push('<div class="panel small" id="ds-history-panel">Loading report history…</div>');
 
+    var A = window.SBAuth || {};
     parts.push(
-      '<div class="panel" id="ds-connection"><div class="panel-h"><h2>Connection</h2>' +
-      '<span class="small">' + (!c ? "Not connected — reports live only in this browser"
-        : c.builtIn ? "Using the read-only connection built into this dashboard" : "Connected with a key saved in this browser") + "</span></div>" +
+      '<div class="panel" id="ds-connection"><div class="panel-h"><h2>Session</h2>' +
+      '<span class="small">' + (!c ? "Not signed in — reports live only in this browser"
+        : (A.role === "editor" ? "Signed in as editor (can upload and change shared settings)" : "Signed in as viewer (read only)") +
+          (A.expiresAt ? " · until " + esc(new Date(A.expiresAt).toLocaleString()) : "")) + "</span></div>" +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
-      '<input id="di-url" placeholder="https://sb-plant-breakdown.<account>.workers.dev" value="' + esc(c ? c.url : "") + '" style="flex:2;min-width:260px;padding:6px 8px;border:1px solid var(--border);border-radius:6px">' +
-      // Masked, but deliberately NOT a password field: browser password
-      // managers would otherwise offer to save the dashboard key with the site.
-      '<input id="di-key" type="text" autocomplete="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" ' +
-      'style="-webkit-text-security:disc" placeholder="Dashboard key" value="' + (savedConn() ? "••••••••" : "") + '">' +
-      '<button id="di-connect">' + (savedConn() ? "Update" : "Connect") + "</button>" +
-      (c ? '<button class="tab" id="di-refresh">Refresh</button>' : "") +
-      (savedConn() ? '<button class="tab danger" id="di-disconnect">Forget this key</button>' : "") +
+      (c ? '<button class="tab" id="di-refresh">Refresh</button><button class="tab" id="di-signout">Sign out</button>' : "") +
       "</div>" +
-      '<div class="small" style="margin-top:6px">Normal viewing needs no key here when the dashboard was built with its read-only connection. ' +
-      "Enter the <b>dashboard</b> key (never the collector key) to upload reports or change shared settings. It is kept in this browser only.</div>" +
+      '<div class="small" style="margin-top:6px">Saved reports are read through this site with your sign-in. No storage address or key is entered or kept in the browser.</div>' +
       (DI.error ? '<div class="small" style="color:#b71c1c;margin-top:6px">' + esc(DI.error) + "</div>" : "") +
       (DI.busy ? '<div class="small" style="margin-top:6px">Loading…</div>' : "") +
       "</div>"
@@ -401,7 +441,7 @@
       var vers = loadVers();
       parts.push('<div class="panel" id="ds-settings"><div class="panel-h"><h2>Shared settings</h2></div>' +
         '<div class="small" style="margin-bottom:6px">Hand-set classifications and confirmed Amazon column mappings, so every browser groups ' +
-        "and reads files the same way. Pushing needs the dashboard key and refuses to overwrite a newer shared copy; pull first if it does.</div>" +
+        "and reads files the same way. Pushing needs an editor sign-in and refuses to overwrite a newer shared copy; pull first if it does.</div>" +
         '<table><tbody>' +
         settingRow("classification_overrides", "Classification overrides", Object.keys(window.SBOverrides.loadLocal()).length, vers,
           Object.keys(window.SBOverrides.loadShared()).length) +
@@ -519,32 +559,24 @@
     var d = new Date(Date.parse(r.imported_at) - 8 * 3600000).toISOString().slice(0, 10);
     return d > r.period_end ? "complete" : "partial";
   }
-  function csvCell(v) { var t = v == null ? "" : String(v); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; }
   async function downloadRevision(id) {
     var rep = (DI.history || []).filter(function (r) { return r.id === id; })[0];
     if (!rep) return;
     try {
       var rows = await fetchRows(rep);
       var M = ["units", "gross", "disc", "ret", "net", "tax", "total"];
-      var lines = [
+      var out = [
         ["# Source", rep.source], ["# Report", rep.report_scope], ["# Sales period", rep.period_start + " to " + rep.period_end],
         ["# Status", completenessOf(rep)], ["# Revision", rep.revision + (rep.status === "superseded" ? " (superseded)" : " (active)")],
         ["# Collected", rep.collected_at || ""], ["# Imported", rep.activated_at || rep.imported_at],
         ["# Timezone", rep.timezone], ["# Currency", rep.currency], []
-      ].map(function (r) { return r.map(csvCell).join(","); });
-      var head = ["product_id", "asin", "title", "vendor", "product_type", "sales_channel"].concat(M, ["glance_views", "inventory"], M.map(function (k) { return "prior_" + k; }));
-      lines.push(head.join(","));
+      ];
+      out.push(["product_id", "asin", "title", "vendor", "product_type", "sales_channel"].concat(M, ["glance_views", "inventory"], M.map(function (k) { return "prior_" + k; })));
       rows.forEach(function (r) {
-        lines.push([r.productId, r.asin, r.title, r.vendor, r.productType, r.salesChannel]
-          .concat(M.map(function (k) { return r.cur[k]; }), [r.cur.glance, r.cur.inv], M.map(function (k) { return r.prior ? r.prior[k] : ""; }))
-          .map(csvCell).join(","));
+        out.push([r.productId, r.asin, r.title, r.vendor, r.productType, r.salesChannel]
+          .concat(M.map(function (k) { return r.cur[k]; }), [r.cur.glance, r.cur.inv], M.map(function (k) { return r.prior ? r.prior[k] : ""; })));
       });
-      var blob = new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
-      var a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = rep.source + "_" + rep.period_start + "_" + rep.period_end + "_r" + rep.revision + ".csv";
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+      window.sbDownloadCsv(rep.source + "_" + rep.period_start + "_" + rep.period_end + "_r" + rep.revision + ".csv", out);
     } catch (e) { alert("Could not download: " + e.message); }
   }
   // Opens one stored revision on its own (for inspection). Earlier revisions
@@ -660,21 +692,8 @@
 
   function wire() {
     var g = function (id) { return document.getElementById(id); };
-    if (g("di-connect")) g("di-connect").onclick = function () {
-      var url = g("di-url").value.trim();
-      var key = g("di-key").value.trim();
-      var old = savedConn();
-      if (/^•+$/.test(key) && old) key = old.key;
-      if (!/^https?:\/\//.test(url)) { DI.error = "Enter the full address, starting with https://"; render(); return; }
-      if (key.length < 32) { DI.error = "That key is too short to be a dashboard key."; render(); return; }
-      saveConn({ url: url, key: key }); refresh(); autoLoad();
-    };
     if (g("di-refresh")) g("di-refresh").onclick = function () { refresh(); autoLoad(); };
-    if (g("di-disconnect")) g("di-disconnect").onclick = function () {
-      if (!confirm("Forget the key saved in this browser? Nothing is deleted anywhere." +
-                   (builtInConn() ? " The dashboard falls back to its built-in read-only connection." : ""))) return;
-      saveConn(null); DI.reports = null; DI.runs = null; render(); autoLoad();
-    };
+    if (g("di-signout")) g("di-signout").onclick = function () { if (window.SBAuth) window.SBAuth.logout(); };
     if (g("di-stale")) g("di-stale").onchange = function (e) {
       try { localStorage.setItem(STALE_KEY, String(Math.max(1, parseInt(e.target.value, 10) || 10))); } catch (x) {}
       render();
@@ -754,7 +773,15 @@
   function start() {
     wireShell();
     renderStatus();
-    autoLoad();
+    // Load saved reports once the server confirms the session (and again
+    // after every sign-in); show the sign-in state after sign-out or expiry.
+    if (window.SBAuth) {
+      window.SBAuth.onChange(function (a) {
+        if (a.isSignedIn()) { autoLoad(); if (isSettingsOpen()) refresh(); }
+        else { AUTO.status = "not_connected"; DI.reports = null; DI.runs = null; DI.history = null; afterAuto(); }
+      });
+      if (window.SBAuth.isSignedIn()) autoLoad();
+    } else autoLoad();
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function () { setTimeout(start, 0); });
   else setTimeout(start, 0);

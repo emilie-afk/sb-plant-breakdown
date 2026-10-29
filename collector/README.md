@@ -41,6 +41,7 @@ With a `shipstation` section in the config (see `config.example.json`), each run
 
 - product level only (store, SKU, description, units, item revenue): no order numbers, no customer data;
 - Succulents Box's own stores are dropped; coupon and adjustment rows are kept as excluded totals;
+- optional `shipstation.storeGroups` (case-insensitive regex → store name) groups several ShipStation store names into one market store. Keep the real rules in `config.local.json` only, and keep them the same as the dashboard's private `market_config` setting so saved reports keep the same store names;
 - the report page must show exactly the requested date range, or the file is refused;
 - sign-in works like Shopify's: if ShipStation asks, a normal window opens on the collector's profile for a person to sign in, then close.
 - **An automated ShipStation window that did not work is not opened again.** If the automated window is not signed in (sign-in page, human check, unexpected page), it is closed and the collector records that in `shipstation-signin.json` (in its own data folder). Later runs skip market data without opening any ShipStation window; the dashboard shows "ShipStation sign-in needed". To resume, sign in through a normal window with `npm run login:shipstation` (closing it lifts the block; the next run tries once), or run `node src/collect.mjs --config config.local.json --retry-shipstation`. ShipStation's sign-in page (Cloudflare) refuses automated browsers, so never sign in inside the window marked "controlled by automated test software".

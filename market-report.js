@@ -36,12 +36,23 @@
     return Number.isFinite(n) ? n : NaN;
   }
   function isOwnStore(name) { return OWN_STORE_RE.test(String(name || "")); }
-  // Same grouping the External Stores tab uses.
-  function storeGroup(raw) {
-    var s = String(raw || "").trim(), low = s.toLowerCase();
+  // Parent-brand grouping of market stores. Which stores belong together is
+  // private business configuration: rules = [{match: "<regex>", group: "<name>"}]
+  // come from the collector's local config or the dashboard's shared setting
+  // "market_config" (window.SBMarketConfig). Without rules a store is its own group.
+  function defaultRules() {
+    var w = typeof window !== "undefined" ? window : null;
+    return w && w.SBMarketConfig && Array.isArray(w.SBMarketConfig.storeGroups) ? w.SBMarketConfig.storeGroups : [];
+  }
+  function storeGroup(raw, rules) {
+    var s = String(raw || "").trim();
     if (!s) return "Unknown";
-    if (low.indexOf("mountain crest") >= 0 || /\bmcg\b/i.test(low)) return "Mountain Crest Gardens";
-    if (low.indexOf("leaf & clay") >= 0 || low.indexOf("leaf and clay") >= 0) return "Leaf & Clay";
+    var list = rules || defaultRules();
+    for (var i = 0; i < list.length; i++) {
+      var re = null;
+      try { re = new RegExp(String(list[i].match || ""), "i"); } catch (e) { re = null; }
+      if (re && list[i].match && re.test(s)) return String(list[i].group || s);
+    }
     return s;
   }
 
@@ -55,7 +66,8 @@
   //   { ok, errors, records (market products), own (own-store products),
   //     adjustments [{store, units, net}], stores [{store, group, own, products, units, net, adjustments}],
   //     totals {market, own, adjustments, all} }
-  function parseProductSales(rows) {
+  function parseProductSales(rows, opts) {
+    var rules = opts && opts.storeGroups;
     var errors = [];
     if (!rows || rows.length < 1) return { ok: false, errors: ["The export is empty."] };
     var h = rows[0].map(function (x) { return String(x || "").trim(); });
@@ -68,7 +80,7 @@
 
     var records = [], own = [], adjustments = [], byStore = {};
     function storeOf(name) {
-      return byStore[name] = byStore[name] || { store: name, group: storeGroup(name), own: isOwnStore(name),
+      return byStore[name] = byStore[name] || { store: name, group: storeGroup(name, rules), own: isOwnStore(name),
         products: 0, units: 0, net: 0, adjustments: 0 };
     }
     for (var i = 1; i < rows.length; i++) {
@@ -114,7 +126,7 @@
                cur: { units: r.units, gross: r.net, disc: 0, ret: 0, net: r.net, tax: 0, total: r.net } };
     }).concat(res.adjustments.filter(function (a) { return !isOwnStore(a.store); }).map(function (a) {
       return { productId: null, title: a.label, vendor: a.store, productType: "(adjustment)", asin: null,
-               salesChannel: storeGroup(a.store), extra: null,
+               salesChannel: storeGroup(a.store, opts.storeGroups), extra: null,
                cur: { units: a.units, gross: 0, disc: a.net, ret: 0, net: a.net, tax: 0, total: a.net } };
     }));
     var M = ["units", "gross", "disc", "ret", "net", "tax", "total"];
@@ -140,7 +152,7 @@
   function externalSnapshotFromShared(report, rows, helpers) {
     helpers = helpers || {};
     var products = rows.filter(function (r) { return r.productType !== "(adjustment)"; }).map(function (r) {
-      return { orderId: "", orderDate: "", rawStore: r.vendor, store: storeGroup(r.vendor), sku: r.sku || "", title: r.title,
+      return { orderId: "", orderDate: "", rawStore: r.vendor, store: storeGroup(r.vendor, helpers.storeGroups), sku: r.sku || "", title: r.title,
                qty: r.cur.units, units: r.cur.units, estRev: r.cur.net, revenueIsActual: true,
                ptype: r.productType || "",
                // the same classifier and overrides as Shopify and Amazon
