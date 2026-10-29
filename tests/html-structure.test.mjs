@@ -67,10 +67,13 @@ test('no file input is needed on the analysis tabs during normal use', () => {
   }
 });
 
-test('the built-in shared connection is a placeholder in the source', () => {
+test('the page has a sign-in form and a sign-out button, and no key or storage address field', () => {
   const raw = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-  assert.match(raw, /name="sb-shared-url" content="__SB_SHARED_URL__"/);
-  assert.match(raw, /name="sb-shared-key" content="__SB_SHARED_KEY__"/);
+  assert.match(raw, /id="sb-login-form"/); assert.match(raw, /type="password"[^>]*autocomplete="current-password"/);
+  assert.match(raw, /id="sb-logout"/);
+  const js = fs.readFileSync(path.join(ROOT, 'data-imports-view.js'), 'utf8');
+  assert.doesNotMatch(js, /id="di-key"|id="di-url"|sb-shared-store-v1|authorization:\s*"Bearer/);
+  assert.match(js, /SBAuth\.fetchJson\("\/api" \+ path/);
 });
 
 test('Data settings has three sections; technical details sit in a collapsed Advanced settings', () => {

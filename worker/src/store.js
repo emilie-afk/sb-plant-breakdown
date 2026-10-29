@@ -224,8 +224,38 @@ export async function storeReport(db, n, hash) {
 
 // ---- settings ----------------------------------------------
 export const SETTING_KEYS = new Set([
-  "classification_overrides", "catalog_mappings", "amazon_column_mappings", "vendor_map"
+  "classification_overrides", "catalog_mappings", "amazon_column_mappings", "vendor_map",
+  // private business configuration kept out of the public repository
+  "restricted_items", "market_config"
 ]);
+export const MAX_SETTING_BYTES = 2 * 1024 * 1024;
+const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
+const short = (v, n) => typeof v === "string" && v.length > 0 && v.length <= n;
+// Store names are short, but a nested quantifier such as (a+)+ can still stall a
+// browser: those patterns are refused.
+function regexOk(src) { if (!short(src, 200) || /\([^)]*[+*}][^)]*\)\s*[+*{]/.test(src)) return false; try { new RegExp(src, "i"); return true; } catch (e) { return false; } }
+// -> null when the value may be stored, else a short reason.
+export function checkSettingValue(key, value) {
+  let size = 0;
+  try { size = JSON.stringify(value).length; } catch (e) { return "not JSON"; }
+  if (size > MAX_SETTING_BYTES) return "too large";
+  if (key === "restricted_items") {
+    if (!isObj(value) || !Array.isArray(value.items) || value.items.length > 20000) return "expected {items:[{sku,name}]}";
+    for (const it of value.items) {
+      if (!isObj(it) || (it.sku != null && !short(String(it.sku), 60)) || (it.name != null && typeof it.name !== "string") || (!it.sku && !it.name)) return "bad item";
+    }
+  }
+  if (key === "market_config") {
+    if (!isObj(value)) return "expected an object";
+    const groups = value.storeGroups || [];
+    if (!Array.isArray(groups) || groups.length > 100 || groups.some(g => !isObj(g) || !regexOk(g.match) || !short(g.group, 80))) return "bad storeGroups";
+    const fn = value.filenameStores || [];
+    if (!Array.isArray(fn) || fn.length > 50 || fn.some(g => !isObj(g) || !regexOk(g.match) || !short(g.store, 80))) return "bad filenameStores";
+    for (const k of ["focusStores"]) if (value[k] != null && (!Array.isArray(value[k]) || value[k].length > 50 || value[k].some(x => !short(x, 80)))) return "bad " + k;
+    for (const k of ["marketplaceStore", "marketplaceBreakdownLabel", "marketplaceOrderStore", "unknownFileStore"]) if (value[k] != null && !short(value[k], 80)) return "bad " + k;
+  }
+  return null;
+}
 export async function getSetting(db, key) {
   const r = await db.prepare(`SELECT * FROM settings WHERE key = ?`).bind(key).first();
   return r ? { key, value: JSON.parse(r.value_json), version: r.version, updatedAt: r.updated_at, updatedBy: r.updated_by } : null;
@@ -245,4 +275,29 @@ export async function putSetting(db, key, value, baseVersion, by) {
        updated_at = excluded.updated_at, updated_by = excluded.updated_by`
   ).bind(key, JSON.stringify(value), v, nowIso(), by || null).run();
   return { ok: true, version: v };
+}
+
+// ---- sign-in attempt counters (route /v1/auth/*, gateway only) ----------
+// Reserve-before-verify: the gateway counts an attempt BEFORE it checks the
+// password and refuses when the count exceeds its limit. Each bucket changes
+// in one atomic statement (SQLite/D1 serialise writes), so N concurrent
+// attempts always produce counts 1..N and at most `limit` of them pass.
+const BUMP_SQL = `INSERT INTO auth_attempts (bucket, window_start, n) VALUES (?1, ?2, 1)
+  ON CONFLICT(bucket) DO UPDATE SET
+    n = CASE WHEN auth_attempts.window_start <= ?2 - ?3 THEN 1 ELSE auth_attempts.n + 1 END,
+    window_start = CASE WHEN auth_attempts.window_start <= ?2 - ?3 THEN ?2 ELSE auth_attempts.window_start END
+  RETURNING n, window_start`;
+export async function reserveAttempt(db, { client, windowSec, now }) {
+  const t = Math.floor(now / 1000);
+  const c = await db.prepare(BUMP_SQL).bind("client:" + client, t, windowSec).first();
+  const g = await db.prepare(BUMP_SQL).bind("global", t, windowSec).first();
+  const left = (r) => Math.max(1, r.window_start + windowSec - t);
+  return { client: { n: c.n, retryAfter: left(c) }, global: { n: g.n, retryAfter: left(g) } };
+}
+// A successful sign-in clears its client's count and gives back its global slot.
+export async function releaseAttempt(db, { client, windowSec, now }) {
+  const t = Math.floor(now / 1000);
+  await db.prepare(`DELETE FROM auth_attempts WHERE bucket = ?1`).bind("client:" + client).run();
+  await db.prepare(`UPDATE auth_attempts SET n = MAX(n - 1, 0) WHERE bucket = 'global' AND window_start > ?1 - ?2`).bind(t, windowSec).run();
+  return { ok: true };
 }
