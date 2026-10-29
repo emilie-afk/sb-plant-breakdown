@@ -89,13 +89,15 @@ $s = Status 'GET' '/v1/ingest/coverage' $ingest $null
 if ($s -ne 200) { Fail "collector key: GET /v1/ingest/coverage answered HTTP $s (200 required)" }
 Ok 'collector key reaches the coverage route -> 200'
 
-foreach ($k in @(@{ t = 'sb-pb-upload'; m = 'POST'; p = '/v1/ingest/product-report' }, @{ t = 'sb-pb-settings'; m = 'PUT'; p = '/v1/settings/classification_overrides' }, @{ t = 'sb-pb-auth'; m = 'POST'; p = '/v1/auth/attempt' })) {
+# Probe bodies are refused BEFORE anything is stored: '[]' is not a report
+# object (an empty '{}' would reach validation and log a rejected import).
+foreach ($k in @(@{ t = 'sb-pb-upload'; m = 'POST'; p = '/v1/ingest/product-report'; b = '[]' }, @{ t = 'sb-pb-settings'; m = 'PUT'; p = '/v1/settings/classification_overrides'; b = '{}' }, @{ t = 'sb-pb-auth'; m = 'POST'; p = '/v1/auth/attempt'; b = '{}' })) {
   $v = StoredKey $k.t
   if (-not $v) { Write-Host "    skipped: $($k.t) not stored (add-gateway-keys.ps1 not run yet)"; continue }
   $s = Status 'GET' '/v1/reports' $v $null
   if ($s -ne 403) { Fail "$($k.t): GET /v1/reports answered HTTP $s (403 required)" }
-  $s = WaitFor { Status $k.m $k.p $v '{}' } 400
-  if ($s -ne 400) { Fail "$($k.t): $($k.m) $($k.p) with an empty body answered HTTP $s (400 required: key accepted, body refused)" }
+  $s = WaitFor { Status $k.m $k.p $v $k.b } 400
+  if ($s -ne 400) { Fail "$($k.t): $($k.m) $($k.p) with a refused body answered HTTP $s (400 required: key accepted, body refused)" }
   Ok "$($k.t): cannot read reports; accepted only by $($k.p)"
   Remove-Variable v
 }
