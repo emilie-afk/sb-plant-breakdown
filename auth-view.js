@@ -5,7 +5,8 @@
 // the same-origin endpoints (/api/session, /api/v1/..., /api/stock-tracker),
 // which check a server-signed, HttpOnly session cookie. This file:
 //   - asks the server whether this browser is signed in (session restore);
-//   - shows a sign-in form when it is not (one password, entered once);
+//   - shows "Sign in with Google" when it is not (the server runs the OAuth
+//     flow and checks the account against its allow-list; no password exists);
 //   - keeps the per-session CSRF token in memory only and adds it to writes;
 //   - is the ONLY way the page calls the API (SBAuth.fetchJson): every call
 //     belongs to a session "epoch"; signing out or expiry aborts calls in
@@ -52,6 +53,16 @@
   A.isEditor = function () { return A.state === "signed_in" && A.role === "editor"; };
   A.headers = function (write) { return write && A.csrf ? { "x-sb-csrf": A.csrf } : {}; };
   A.reload = function () { location.reload(); };   // replaced in tests
+  A.navigate = function (url) { location.assign(url); };   // replaced in tests
+  // Outcome codes the server appends after a failed Google sign-in.
+  var SIGNIN_MESSAGES = {
+    denied: "This Google account is not allowed to open the dashboard. Ask the owner to add it, or choose another account.",
+    cancelled: "Sign-in was cancelled.",
+    expired: "The sign-in took too long or was started in another tab. Please try again.",
+    failed: "Google sign-in could not be completed. Please try again.",
+    too_many: "Too many sign-in attempts. Please wait 15 minutes and try again.",
+    unavailable: "Sign-in is not available right now (server configuration)."
+  };
 
   // ---- the only path to the API ----------------------------------------
   // -> {status, body}. Rejects when not signed in, when the session changed
@@ -104,7 +115,7 @@
   function setSession(b) {
     A.epoch++;          // a session change: answers meant for the previous state are void
     if (b && b.authenticated) {
-      A.state = "signed_in"; A.role = b.role; A.expiresAt = b.expiresAt; A.csrf = b.csrf; A.serverDown = false;
+      A.state = "signed_in"; A.role = b.role; A.email = b.email || ""; A.expiresAt = b.expiresAt; A.csrf = b.csrf; A.serverDown = false; A.loginError = "";
       if (deadlinePassed()) { expireLocally(); return; }   // already past its deadline: never unlock
       unlock(); scheduleExpiry();
     } else { A.state = "signed_out"; A.role = null; A.expiresAt = null; A.csrf = null; }
@@ -183,20 +194,22 @@
     else setSession(null);
   };
 
-  A.login = async function (password) {
-    var r = await fetch("/api/session", {
-      method: "POST", credentials: "same-origin", cache: "no-store",
-      headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({ password: password })
-    });
-    var b = await r.json().catch(function () { return {}; });
-    if (r.status === 429) throw new Error("Too many attempts. Try again in " + Math.ceil((b.retryAfter || 60) / 60) + " minute(s).");
-    if (!r.ok || !b.authenticated) throw new Error(r.status === 503 ? "Sign-in is not available right now (server configuration)." : "That password was not accepted.");
-    var reloadNeeded = A.dirty;
-    setSession(b);
-    // after an expiry or failed state the rendered views were emptied:
-    // reload so the page rebuilds them for the new session
-    if (reloadNeeded && A.state === "signed_in") A.reload();
+  // Sign-in is a full-page trip to Google and back (server-side OAuth); the
+  // new page then finds its session with A.check(). Any locked state —
+  // signed out, expired, server unavailable, failed sign-out — can start it.
+  A.startSignIn = function () {
+    if (A.state === "signing_out") return;
+    lock();
+    A.navigate("/api/auth/google/start");
+  };
+  // ?signin=<code> after a failed Google sign-in: show it once, then drop it
+  // from the address bar.
+  A.readSignInOutcome = function (search) {
+    var m = /[?&]signin=([a-z_]{1,20})/.exec(search || "");
+    if (!m) return null;
+    A.loginError = SIGNIN_MESSAGES[m[1]] || SIGNIN_MESSAGES.failed;
+    try { history.replaceState(null, "", location.pathname + location.hash); } catch (e) {}
+    return m[1];
   };
 
   // Sign-out completes only when the server confirms the session is revoked
@@ -254,7 +267,7 @@
     var who = el("sb-session-who");
     if (who) {
       who.textContent = A.isSignedIn() ? (A.role === "editor" ? "Editor" : "Viewer") : "";
-      who.title = A.expiresAt ? "Session ends " + new Date(A.expiresAt).toLocaleString() : "";
+      who.title = A.isSignedIn() ? (A.email || "") + (A.expiresAt ? " · session ends " + new Date(A.expiresAt).toLocaleString() : "") : "";
     }
     var lo = el("sb-logout");
     if (lo) lo.style.display = A.isSignedIn() ? "" : "none";
@@ -265,16 +278,9 @@
   // (index.html also starts with the class set).
   lock();
   document.addEventListener("DOMContentLoaded", function () {
-    var form = el("sb-login-form");
-    if (form) form.addEventListener("submit", async function (e) {
-      e.preventDefault();
-      var pw = el("sb-login-password");
-      var btn = el("sb-login-submit");
-      A.loginError = ""; btn.disabled = true;
-      try { await A.login(pw.value); pw.value = ""; }
-      catch (err) { A.loginError = err.message; render(); }
-      finally { btn.disabled = false; }
-    });
+    try { A.readSignInOutcome(location.search); } catch (e) {}
+    var go = el("sb-login-submit");
+    if (go) go.addEventListener("click", function () { A.startSignIn(); });
     var lo = el("sb-logout");
     if (lo) lo.addEventListener("click", function () { A.logout(); });
     var retry = el("sb-logout-retry");

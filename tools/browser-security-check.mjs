@@ -1,8 +1,8 @@
 // tools/browser-security-check.mjs — browser checks of the session boundary,
 // HTML escaping and CSV exports, against the LOCAL harness only:
 //
-//   DEV_VIEWER_PASSWORD=… DEV_EDITOR_PASSWORD=… node tools/devserver.mjs --seed --dev-controls --port 8890
-//   DEV_EDITOR_PASSWORD=… PW_FROM=<dir with playwright-core> [CHROME=<chromium>] \
+//   node tools/devserver.mjs --seed --dev-controls --port 8890     (fake Google sign-in)
+//   PW_FROM=<dir with playwright-core> [CHROME=<chromium>] [SIGNIN_EMAIL=editor@example.test] \
 //     node tools/browser-security-check.mjs http://127.0.0.1:8890 [outDir]
 //
 // The harness seeds hostile text (HTML/script in titles, vendors, product
@@ -32,8 +32,7 @@ const site = (process.argv[2] || '').replace(/\/+$/, '');
 if (!/^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(site)) { console.error('Local harness URL only, e.g. http://127.0.0.1:8890'); process.exit(10); }
 const outDir = path.resolve(process.argv[3] || '_work/browser-security');
 fs.mkdirSync(outDir, { recursive: true });
-const PW = process.env.DEV_EDITOR_PASSWORD;
-if (!PW) { console.error('Set DEV_EDITOR_PASSWORD (the harness editor password).'); process.exit(10); }
+const EMAIL = process.env.SIGNIN_EMAIL || 'editor@example.test';   // an editor account of the harness's fake Google
 const require = createRequire(path.join(process.env.PW_FROM || path.resolve('collector'), 'package.json'));
 const { chromium } = require(process.env.PW_MODULE || 'playwright-core');
 
@@ -72,9 +71,16 @@ const wait = (ms) => page.waitForTimeout(ms);
 const injected = () => page.evaluate(() => ({ els: document.querySelectorAll('[data-xss]').length, ran: !!window.__sbXss }));
 const dev = (q) => page.evaluate(async (q) => (await fetch('/__dev/control?' + q)).json(), q);
 
+// Sign in with (the harness's fake) Google: button -> provider page -> account.
+async function googleSignIn(email) {
+  await page.click('#sb-login-submit');
+  await page.waitForSelector(`[data-account="${email}"]`, { timeout: 15000 });
+  await page.click(`[data-account="${email}"]`);
+  await page.waitForLoadState('load'); await wait(1500);
+}
 async function signIn() {
   await page.goto(site + '/'); await wait(1500);
-  if (await page.isVisible('#sb-login-form')) { await page.fill('#sb-login-password', PW); await page.click('#sb-login-submit'); }
+  if (await page.isVisible('#sb-login-form')) await googleSignIn(EMAIL);
   await page.waitForSelector('#sb-login', { state: 'hidden', timeout: 30000 });
   await page.waitForFunction(() => /Sales period/.test(document.querySelector('#sb-data-status')?.innerText || ''), null, { timeout: 30000 });
   await wait(1500);
@@ -82,7 +88,26 @@ async function signIn() {
 
 try {
   await signIn();
-  pass('signed in as editor', (await page.textContent('#sb-session-who')) === 'Editor');
+  // first: an account that is not on the allow-list, and a cancelled sign-in
+  // (fresh context, so the main session is not affected)
+  {
+    const c2 = await browser.newContext(); const p2 = await c2.newPage();
+    await p2.goto(site + '/'); await p2.waitForTimeout(1200);
+    await p2.click('#sb-login-submit'); await p2.click('[data-account="outsider@example.test"]'); await p2.waitForTimeout(1500);
+    const denied = await p2.evaluate(() => ({ url: location.href, msg: document.getElementById('sb-login-msg').textContent,
+      locked: document.documentElement.classList.contains('sb-locked') }));
+    const cookies = (await c2.cookies()).map(c => c.name);
+    pass('an account not on the allow-list is refused: message shown, no session, page locked, URL cleaned',
+         /not allowed/i.test(denied.msg) && denied.locked && !cookies.includes('__Host-sbpb_session') && !/signin=/.test(denied.url), { denied, cookies });
+    await p2.click('#sb-login-submit'); await p2.click('[data-account="cancel"]'); await p2.waitForTimeout(1200);
+    pass('a cancelled Google sign-in says so and stays locked', /cancelled/i.test(await p2.textContent('#sb-login-msg')));
+    await c2.close();
+  }
+  pass('signed in with Google as an editor', (await page.textContent('#sb-session-who')) === 'Editor' &&
+       (await page.evaluate(() => window.SBAuth.email)) === EMAIL);
+  const sc = (await ctx.cookies()).find(c => c.name === '__Host-sbpb_session');
+  pass('session cookie after Google sign-in: HttpOnly, Secure, SameSite=Strict; no OAuth state cookie left',
+       !!sc && sc.httpOnly && sc.secure && sc.sameSite === 'Strict' && !(await ctx.cookies()).some(c => c.name === '__Host-sbpb_oauth'));
 
   // ---- SheetJS: the verified local copy, nothing from a CDN ---------------
   const sj = await page.evaluate(() => ({ version: window.XLSX && XLSX.version,

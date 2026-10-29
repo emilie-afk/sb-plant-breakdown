@@ -100,12 +100,12 @@ test('errors are redacted: no stack, SQL or values', async () => {
 });
 
 // ---- gateway -> real Worker ------------------------------------------
-const FAST = { N: 16384, r: 8, p: 1 };
-const NENV = { SESSION_SECRET: 'x'.repeat(40), DASHBOARD_EDITOR_PASSWORD_HASH: S.hashPassword('editor-password-456', FAST),
-  DASHBOARD_VIEWER_PASSWORD_HASH: S.hashPassword('viewer-password-123', FAST),
+const NENV = { SESSION_SECRET: 'x'.repeat(40),
+  GOOGLE_CLIENT_ID: '1234-test.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET: 'google-client-secret-123',
+  GOOGLE_ALLOWED_EMAILS: 'viewer@example.com', GOOGLE_EDITOR_EMAILS: 'editor@example.com', GOOGLE_REDIRECT_ORIGINS: 'https://dash.example',
   WORKER_URL: 'https://w.example', WORKER_VIEWER_SECRET: K.VIEWER_SECRET, WORKER_UPLOAD_SECRET: K.UPLOAD_SECRET, WORKER_SETTINGS_SECRET: K.SETTINGS_SECRET };
 const cfg = S.loadAuthConfig(NENV);
-const sess = (role) => { const s = S.signSession(cfg, { role }); return { cookie: S.COOKIE + '=' + s.token, csrf: S.csrfToken(cfg, s.payload.sid) }; };
+const sess = (role) => { const s = S.signSession(cfg, { role, email: role + '@example.com' }); return { cookie: S.COOKIE + '=' + s.token, csrf: S.csrfToken(cfg, s.payload.sid) }; };
 const gw = (e) => async (method, p, s, body) => {
   const h = { cookie: s.cookie, 'x-sb-csrf': s.csrf, origin: 'https://dash.example' }; if (body !== undefined) h['content-type'] = 'application/json';
   const r = await apiHandler(new Request('https://dash.example/api' + p, { method, headers: h, body: body === undefined ? undefined : JSON.stringify(body) }),

@@ -7,16 +7,15 @@ import * as S from '../server/session.mjs';
 import { apiHandler, trackerHandler, matchRoute, _resetTrackerToken } from '../server/handlers.mjs';
 
 const ORIGIN = 'https://dash.example';
-const FAST = { N: 16384, r: 8, p: 1 };
 const BASE_ENV = {
   SESSION_SECRET: 'x'.repeat(40),
-  DASHBOARD_VIEWER_PASSWORD_HASH: S.hashPassword('viewer-password-123', FAST),
-  DASHBOARD_EDITOR_PASSWORD_HASH: S.hashPassword('editor-password-456', FAST),
+  GOOGLE_CLIENT_ID: '1234-test.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET: 'google-client-secret-123',
+  GOOGLE_ALLOWED_EMAILS: 'viewer@example.com', GOOGLE_EDITOR_EMAILS: 'editor@example.com', GOOGLE_REDIRECT_ORIGINS: 'https://dash.example',
   WORKER_URL: 'https://worker.example', WORKER_VIEWER_SECRET: 'V'.repeat(40), WORKER_UPLOAD_SECRET: 'U'.repeat(40), WORKER_SETTINGS_SECRET: 'T'.repeat(40),
   STOCK_TRACKER_URL: 'https://tracker.example', STOCK_TRACKER_PASSWORD: 'tracker-pass-xyz'
 };
 const cfg = S.loadAuthConfig(BASE_ENV);
-function session(role) { const s = S.signSession(cfg, { role }); return { cookie: S.COOKIE + '=' + s.token, csrf: S.csrfToken(cfg, s.payload.sid) }; }
+function session(role) { const s = S.signSession(cfg, { role, email: role + '@example.com' }); return { cookie: S.COOKIE + '=' + s.token, csrf: S.csrfToken(cfg, s.payload.sid) }; }
 function mockFetch(respond) {
   const calls = [];
   const f = async (url, init) => { calls.push({ url, init }); return respond ? respond(url, init) : new Response(JSON.stringify({ ok: true, echo: url }), { status: 200 }); };

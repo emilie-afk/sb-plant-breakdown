@@ -1,6 +1,6 @@
 // server/handlers.mjs — the three same-origin endpoints behind the dashboard.
 //
-//   /api/session        GET status · POST sign in · DELETE sign out
+//   /api/session        GET status · DELETE sign out (sign-in: /api/auth/google/*, google.mjs)
 //   /api/v1/...         allowlisted gateway to the Worker (server-held keys)
 //   /api/stock-tracker  GET stock-tracker data (server-held tracker password)
 //
@@ -18,50 +18,23 @@ const NO_STORE = {
 export function reply(body, status = 200, extra = {}) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', ...NO_STORE, ...extra } });
 }
-async function readSmallJson(req, max = 4096) {
-  const len = Number(req.headers.get('content-length') || 0);
-  if (len > max) return null;
-  const t = await req.text();
-  if (t.length > max) return null;
-  try { return JSON.parse(t); } catch { return null; }
-}
 
 // ---------------------------------------------------------------------------
 // /api/session
 // ---------------------------------------------------------------------------
-export async function sessionHandler(req, { env, store, ip, fetchImpl = fetch, now = Date.now(), timeoutMs = 9000 }) {
+export async function sessionHandler(req, { env, store, now = Date.now() }) {
   const cfg = S.loadAuthConfig(env);
   if (!cfg.ok) return reply({ ok: false, error: 'not_configured' }, 503);
 
   if (req.method === 'GET') {
     const a = await S.authorize(req, cfg, store, { now });
     if (!a.ok) return reply({ ok: true, authenticated: false }, 200, a.status === 401 && S.readCookie(req) ? { 'set-cookie': S.clearCookie() } : {});
-    return reply({ ok: true, authenticated: true, role: a.session.role, expiresAt: new Date(a.session.exp * 1000).toISOString(),
-                   csrf: S.csrfToken(cfg, a.session.sid) });
+    return reply({ ok: true, authenticated: true, role: a.session.role, email: a.session.email,
+                   expiresAt: new Date(a.session.exp * 1000).toISOString(), csrf: S.csrfToken(cfg, a.session.sid) });
   }
 
-  if (req.method === 'POST') {
-    // Sign-in is a cross-site-sensitive write too: same origin, JSON only.
-    if (!S.sameOrigin(req)) return reply({ ok: false, error: 'bad_origin' }, 403);
-    if (!/^application\/json\b/i.test(req.headers.get('content-type') || '')) return reply({ ok: false, error: 'bad_request' }, 415);
-    const lim = workerLimiter(env, fetchImpl, cfg, timeoutMs);
-    if (!lim) return reply({ ok: false, error: 'not_configured' }, 503);
-    const ck = S.clientKey(cfg, req, ip);
-    // Count the attempt BEFORE checking the password (atomic, in the Worker):
-    // of N simultaneous attempts at most the limit get a password check.
-    let r;
-    try { r = await lim.reserve(ck); } catch { return reply({ ok: false, error: 'limiter_unavailable' }, 503); }
-    const over = r.client.n > cfg.perClientFailures ? r.client : r.global.n > cfg.globalFailures ? r.global : null;
-    if (over) return reply({ ok: false, error: 'too_many_attempts', retryAfter: over.retryAfter }, 429, { 'retry-after': String(over.retryAfter) });
-    const body = await readSmallJson(req, 2048);
-    const password = body && typeof body.password === 'string' ? body.password : '';
-    const role = password ? await S.roleForPassword(cfg, password) : null;
-    if (!role) return reply({ ok: false, error: 'invalid_password' }, 401);   // stays counted
-    try { await lim.release(ck); } catch { /* the count stays until the window ends */ }
-    const { token, payload } = S.signSession(cfg, { role, now });
-    return reply({ ok: true, authenticated: true, role, expiresAt: new Date(payload.exp * 1000).toISOString(),
-                   csrf: S.csrfToken(cfg, payload.sid) }, 200, { 'set-cookie': S.sessionCookie(token, cfg.ttlSec) });
-  }
+  // Sign-in is "Sign in with Google" (server/google.mjs): there is no password.
+  if (req.method === 'POST') return reply({ ok: false, error: 'use_google_sign_in' }, 405, { allow: 'GET, DELETE' });
 
   if (req.method === 'DELETE') {
     const a = await S.authorize(req, cfg, store, { write: true, now });
@@ -69,7 +42,7 @@ export async function sessionHandler(req, { env, store, ip, fetchImpl = fetch, n
     else if (a.status === 403) return reply({ ok: false, error: a.error }, 403);
     return reply({ ok: true, authenticated: false }, 200, { 'set-cookie': S.clearCookie() });
   }
-  return reply({ ok: false, error: 'method_not_allowed' }, 405, { allow: 'GET, POST, DELETE' });
+  return reply({ ok: false, error: 'method_not_allowed' }, 405, { allow: 'GET, DELETE' });
 }
 
 // ---------------------------------------------------------------------------

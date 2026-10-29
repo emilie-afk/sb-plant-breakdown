@@ -15,27 +15,45 @@ Windows collector ──(INGEST key from Credential Manager)──────�
 
 ## 1. Sessions (`server/session.mjs`)
 
-- One password per role, checked on the server against a scrypt hash
-  (`DASHBOARD_VIEWER_PASSWORD_HASH`, `DASHBOARD_EDITOR_PASSWORD_HASH`). The
-  password is typed once; it is never stored in the browser.
+- **Sign in with Google** — there are no dashboard passwords. Server-side
+  OAuth 2.0 / OpenID Connect authorization-code flow with PKCE
+  (`server/google.mjs`): `/api/auth/google/start` redirects to Google with
+  `state`, `nonce` and an S256 code challenge, whose secrets travel in an
+  AES-256-GCM-sealed, 10-minute, `HttpOnly; Secure; SameSite=Lax` cookie;
+  `/api/auth/google/callback` checks `state` (login CSRF), exchanges the code
+  with the client secret and the PKCE verifier, verifies the ID token's RS256
+  signature against Google's published keys and its `iss`, `aud`, `exp`,
+  `nonce` and `email_verified`, then checks the email against the allow-list.
+  The browser never sees the client secret, the verifier or any Google token.
+- **Allow-list** (`GOOGLE_ALLOWED_EMAILS`) and **editor list**
+  (`GOOGLE_EDITOR_EMAILS`; editors are always allowed): only listed Google
+  accounts get a session; everyone else sees "This Google account is not
+  allowed". Both lists are checked on **every request**, so removing an email
+  (and redeploying) ends that person's access at once, and moving an email
+  on/off the editor list changes their rights at once.
+- The redirect URI is built only from origins in `GOOGLE_REDIRECT_ORIGINS`;
+  each must also be registered as an authorized redirect URI in Google Cloud
+  (`<origin>/api/auth/google/callback`).
 - Cookie `__Host-sbpb_session`: HMAC-SHA256-signed, `HttpOnly; Secure;
   SameSite=Strict; Path=/`, no Domain. Expiry (default 12 h, max 24 h) is
   checked on every request.
-- `SESSION_SECRET` signs; it is separate from the passwords.
+- `SESSION_SECRET` signs sessions and seals the OAuth state; it is separate
+  from the Google client secret.
 - Session restore: `GET /api/session`. Logout: `DELETE /api/session` revokes
   the session id in Netlify Blobs; if that write fails the function answers
   500 and the session stays valid. **End every session at once**: change
   `SESSION_GENERATION` (or `SESSION_SECRET`) and redeploy.
 - Writes need the `x-sb-csrf` header (HMAC of the session id, kept in page
-  memory only) **and** a same-origin `Origin`. Sign-in needs same origin and JSON.
-- Sign-in limits are **concurrency-safe**: every attempt is counted *before*
-  the password is checked, with one atomic SQL statement per bucket
+  memory only) **and** a same-origin `Origin`.
+- Sign-in limits are **concurrency-safe**: every Google callback is counted
+  *before* the code is exchanged and the account checked, with one atomic SQL statement per bucket
   (`INSERT … ON CONFLICT DO UPDATE … RETURNING`) in the Worker's D1 database
   (`POST /v1/auth/attempt`, key `AUTH_SECRET`, migration 0006). N simultaneous
   attempts get counts 1…N, so at most the limit (5 per client, 30 in total
-  per 15 minutes, configurable) reach a password check; the rest get 429. A
-  successful sign-in clears its client count and returns its global slot.
-  Tested with 40 simultaneous requests (exactly 5 → 401, 35 → 429; counter = 40).
+  per 15 minutes, configurable) are checked; the rest are refused
+  (`?signin=too_many`). A successful sign-in clears its client count and
+  returns its global slot. Tested with 40 simultaneous refused sign-ins
+  (exactly 5 checked, 35 refused; counter = 40; only 5 code exchanges).
   Client addresses are stored only as an HMAC. If the counter cannot be
   reached, sign-in is refused (503).
 - Missing or weak configuration means 503 for everything (fail closed).
@@ -156,8 +174,11 @@ shared copy is never overwritten.
 | Variable | Value |
 |---|---|
 | `SESSION_SECRET` | `<64 random hex>` (`node tools/make-session-secret.mjs`) |
-| `DASHBOARD_VIEWER_PASSWORD_HASH` | `<scrypt$…>` (`node tools/hash-password.mjs`) |
-| `DASHBOARD_EDITOR_PASSWORD_HASH` | `<scrypt$…>` (a different password) |
+| `GOOGLE_CLIENT_ID` | `<…>.apps.googleusercontent.com` (Google Cloud → APIs & Services → Credentials → OAuth client ID, type *Web application*) |
+| `GOOGLE_CLIENT_SECRET` | `<client secret of that OAuth client>` |
+| `GOOGLE_ALLOWED_EMAILS` | `name1@succulentsbox.com, name2@gmail.com` (viewers; comma separated) |
+| `GOOGLE_EDITOR_EMAILS` | `owner@succulentsbox.com` (can upload and change settings; always allowed) |
+| `GOOGLE_REDIRECT_ORIGINS` | `https://sb-plant-breakdown.netlify.app` plus the deploy-preview origin while testing |
 | `SESSION_GENERATION` | `1` (change to end all sessions) |
 | `SESSION_TTL_HOURS` | `12` (optional) |
 | `WORKER_URL` | `https://<worker>.<account>.workers.dev` |
@@ -169,6 +190,13 @@ shared copy is never overwritten.
 | `STOCK_TRACKER_PASSWORD` | `<new tracker password>` |
 
 Remove after rollout: `SB_SHARED_URL`, `SB_SHARED_KEY`, `SB_MCG_PASSWORD`, `APP_PASSWORD`.
+
+**Google Cloud OAuth client** (done by the owner): consent screen *Internal*
+if every user is in the succulentsbox.com Workspace, otherwise *External* in
+*Testing* or *Production* with scopes `openid` and `email` only; authorized
+redirect URIs: `https://sb-plant-breakdown.netlify.app/api/auth/google/callback`
+and, for the preview, `https://deploy-preview-2--sb-plant-breakdown.netlify.app/api/auth/google/callback`
+(remove the preview one after the rollout). No JavaScript origins are needed.
 The build fails if any server variable's value appears in the page.
 
 **Cloudflare Worker secrets:** existing `INGEST_SECRET`, `VIEWER_SECRET`,
@@ -197,8 +225,10 @@ the old viewer key is retired, so it can never read them.
 1. **Worker, additive**: apply migration 0006, deploy the Worker code, run
    `add-gateway-keys.ps1 -Apply` (UPLOAD/SETTINGS/AUTH), `verify-worker.ps1`.
    The live dashboard keeps working (the old viewer key is untouched).
-2. **Netlify variables** (scope Functions): `SESSION_SECRET`, both password
-   hashes, `WORKER_URL`, `WORKER_UPLOAD_SECRET`, `WORKER_SETTINGS_SECRET`,
+2. **Google OAuth client + Netlify variables** (scope Functions): create the
+   OAuth client (above); then `SESSION_SECRET`, `GOOGLE_CLIENT_ID`,
+   `GOOGLE_CLIENT_SECRET`, `GOOGLE_ALLOWED_EMAILS`, `GOOGLE_EDITOR_EMAILS`,
+   `GOOGLE_REDIRECT_ORIGINS` (production + preview origin), `WORKER_URL`, `WORKER_UPLOAD_SECRET`, `WORKER_SETTINGS_SECRET`,
    `WORKER_AUTH_SECRET`, the tracker URL; `WORKER_VIEWER_SECRET` = the *current*
    viewer key for the preview only (server side; no new exposure; it is retired
    in step 4).
@@ -297,5 +327,8 @@ delete old deploys that embedded keys, or accept them once the keys are retired.
 - Sign-in depends on the Worker being reachable (attempt counters); if not,
   sign-in is refused rather than unlimited.
 - Revoked-session records are not pruned (small; expire logically).
-- A signed-in viewer can read all revenue history: share the viewer password
-  only with people who may see it.
+- A signed-in viewer can read all revenue history: list only people who may
+  see it. Sign-in depends on Google (an outage at Google means no new
+  sign-ins; existing sessions keep working until they expire).
+- Access follows the Google account: if a listed person's Google account is
+  compromised, so is their dashboard access — encourage 2-step verification.
