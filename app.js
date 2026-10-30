@@ -3961,6 +3961,7 @@ async function trackerFetch(forceRefresh) {
     // Session-bound call: an answer that arrives after sign-out is discarded.
     var r = await window.SBAuth.fetchJson(trackerConfig().endpoint + (forceRefresh ? "?refresh=1" : ""), { headers: { accept: "application/json" } });
     if (r.status === 503) throw new Error("not configured on the server");
+    if (r.status === 504) throw new Error("the tracker took too long to answer; try Refresh in a minute");
     if (r.status !== 200 || !r.body) throw new Error("tracker unavailable (" + r.status + ")");
     var j = r.body;
     TRACKER_STATE.data = j;

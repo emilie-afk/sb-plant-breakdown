@@ -2,11 +2,13 @@
 //
 //   /api/session        GET status · DELETE sign out (sign-in: /api/auth/google/*, google.mjs)
 //   /api/v1/...         allowlisted gateway to the Worker (server-held keys)
-//   /api/stock-tracker  GET stock-tracker data (server-held tracker password)
+//   /api/stock-tracker  GET stock-tracker data (server-held tracker password;
+//                       production: Edge Function, see server/tracker-core.mjs)
 //
 // Every handler takes a standard Request and returns a Response, so the same
 // code runs in Netlify Functions, the local dev server and the tests.
 import * as S from './session.mjs';
+import { trackerCore } from './tracker-core.mjs';
 
 const NO_STORE = {
   'cache-control': 'no-store, private, max-age=0',
@@ -193,53 +195,15 @@ export async function apiHandler(req, { env, store, fetchImpl = fetch, now = Dat
 
 // ---------------------------------------------------------------------------
 // /api/stock-tracker — the stock tracker app's data, fetched with a password that
-// stays on the server (it used to be built into the page).
+// stays on the server. Production serves it from an Edge Function (the ~30 s
+// scrape needs more time than this gateway's former 9 s upstream timeout);
+// the logic is server/tracker-core.mjs. This wrapper is for the local dev
+// server and the tests.
 // ---------------------------------------------------------------------------
-const trackerToken = { value: null, exp: 0 };
-// The tracker app names its "listed by the supplier, not carried by us" list
-// after the supplier; the page receives a neutral name.
-export function normalizeTracker(j) {
-  if (!j || typeof j !== 'object' || Array.isArray(j)) return {};
-  const out = Object.assign({}, j);
-  for (const k of Object.keys(out)) if (/^mcg/i.test(k)) { out['supplier' + k.slice(3)] = out[k]; delete out[k]; }
-  return out;
-}
-export async function trackerHandler(req, { env, store, fetchImpl = fetch, now = Date.now(), timeoutMs = 9000 }) {
+export { normalizeTracker, _resetTrackerToken } from './tracker-core.mjs';
+export async function trackerHandler(req, { env, store, fetchImpl = fetch, now = Date.now(), budgetMs }) {
   const cfg = S.loadAuthConfig(env);
   if (!cfg.ok) return reply({ ok: false, error: 'not_configured' }, 503);
-  if (req.method !== 'GET') return reply({ ok: false, error: 'method_not_allowed' }, 405, { allow: 'GET' });
-  const a = await S.authorize(req, cfg, store, { now });
-  if (!a.ok) return reply({ ok: false, error: a.error }, a.status);
-  const url = new URL(req.url);
-  for (const k of url.searchParams.keys()) if (k !== 'refresh') return reply({ ok: false, error: 'bad_parameter' }, 400);
-  const refresh = url.searchParams.get('refresh') === '1';
-  let base;
-  try { base = new URL(String(env.STOCK_TRACKER_URL || '')); } catch { base = null; }
-  const pwd = String(env.STOCK_TRACKER_PASSWORD || '');
-  if (!base || base.protocol !== 'https:' || base.pathname !== '/' || base.search || !pwd) return reply({ ok: false, error: 'not_configured' }, 503);
-  const call = async (path, init) => {
-    const ac = new AbortController(); const t = setTimeout(() => ac.abort(), timeoutMs);
-    try { return await fetchImpl(base.origin + path, { ...init, redirect: 'manual', signal: ac.signal }); }
-    finally { clearTimeout(t); }
-  };
-  const auth = async () => {
-    const r = await call('/.netlify/functions/auth', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: pwd }) });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || !j.token) throw new Error('auth');
-    trackerToken.value = j.token; trackerToken.exp = now + 6 * 3600 * 1000;
-  };
-  try {
-    if (!trackerToken.value || now > trackerToken.exp) await auth();
-    const path = '/.netlify/functions/scrape' + (refresh ? '?refresh=true' : '');
-    let r = await call(path, { headers: { authorization: 'Bearer ' + trackerToken.value } });
-    if (r.status === 401) { await auth(); r = await call(path, { headers: { authorization: 'Bearer ' + trackerToken.value } }); }
-    if (!r.ok) return reply({ ok: false, error: 'tracker_failed', status: r.status }, 502);
-    const text = await r.text();
-    if (text.length > 5 * 1024 * 1024) return reply({ ok: false, error: 'tracker_response_too_large' }, 502);
-    return reply(normalizeTracker(JSON.parse(text)), 200);
-  } catch {
-    trackerToken.value = null;
-    return reply({ ok: false, error: 'tracker_unavailable' }, 502);
-  }
+  const authorize = (r) => S.authorize(r, cfg, store, { now });
+  return trackerCore(req, { env, authorize, fetchImpl, now, ...(budgetMs ? { budgetMs } : {}) });
 }
-export function _resetTrackerToken() { trackerToken.value = null; trackerToken.exp = 0; }

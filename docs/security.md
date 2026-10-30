@@ -120,12 +120,36 @@ Windows collector ──(INGEST key from Credential Manager)──────�
 | `GET /api/v1/settings/:key` (6 allowlisted keys) | viewer, editor | `GET /v1/settings/:key` | viewer | viewer, dashboard |
 | `PUT /api/v1/settings/:key` (classification_overrides, amazon_column_mappings, catalog_mappings; ≤2 MB) | editor + CSRF | `PUT /v1/settings/:key` | `WORKER_SETTINGS_SECRET` | settings, dashboard |
 | `POST /api/v1/ingest/product-report` (≤5 MB) | editor + CSRF | `POST /v1/ingest/product-report` | `WORKER_UPLOAD_SECRET` | collector, uploader, dashboard |
-| `GET /api/stock-tracker?refresh=1` | viewer, editor | tracker app (fixed paths) | `STOCK_TRACKER_PASSWORD` | — |
+| `GET /api/stock-tracker?refresh=1` (Edge Function, see below) | viewer, editor | tracker app (fixed paths) | `STOCK_TRACKER_PASSWORD` | — |
 | `POST /api/session` (sign-in) | — | `POST /v1/auth/attempt`, `/v1/auth/success` | `WORKER_AUTH_SECRET` | auth |
 | — (not reachable from the browser) | | `POST /v1/ingest/collection-failure` | | collector |
 | — | | `GET /v1/ingest/coverage` | | collector, dashboard |
 | — | | `POST /v1/ingest/vendor-map` | | collector, dashboard |
 | — | | `GET /v1/health` | | public: `{ok, service, time}` only |
+
+`/api/stock-tracker` is a Netlify **Edge Function** (`netlify/edge-functions/stock-tracker.js`).
+The tracker app's scrape takes about 30 s. The previous Netlify Function gateway
+cut it off with its own 9 s upstream timeout, so the page always got "tracker
+unavailable". An Edge Function may wait up to 40 s for its response to begin.
+It does not read the session cookie itself: it asks this site's `/api/session`
+with the caller's cookie (same signature, expiry, revocation and allow-list
+checks as every other route) and calls the tracker only when that says "signed
+in as viewer or editor".
+
+One **37 s deadline** covers the whole request: the `/api/session` check, the
+tracker sign-in (request and body) and the scrape (request and body). All
+upstream calls share one abort signal, and the result is raced against the
+deadline, so the page gets `504 tracker_timeout` on time even if an upstream
+stalls and ignores the abort. Anything that finishes after the deadline is
+discarded and cannot write the cached tracker token. The logic is
+`server/tracker-core.mjs` (Web APIs only, shared with the dev server and tests).
+
+`STOCK_TRACKER_URL` and `STOCK_TRACKER_PASSWORD` need the **Functions** scope
+(Edge Functions read variables with that scope; no other scope is needed) and a
+value for every deploy context that serves the dashboard, **including Deploy
+Previews** while PR #2 is being checked. Variables are read at deploy time:
+after adding or changing one, trigger a new deploy (or retry the preview) before
+testing.
 
 Gateway rules: every other path, method or parameter is refused (authentication
 is checked first, so the table is not revealed); the destination is fixed by
