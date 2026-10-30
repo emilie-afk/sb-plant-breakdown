@@ -9,7 +9,8 @@
 #   /api/session       session status / sign out (netlify/functions/session.mjs)
 #   /api/auth/google/* Sign in with Google (auth-google.mjs)
 #   /api/v1/*          allowlisted gateway to the Worker (api-v1.mjs)
-#   /api/stock-tracker stock-tracker data (stock-tracker.mjs)
+#   /api/stock-tracker stock-tracker data (Edge Function: netlify/edge-functions/stock-tracker.js;
+#                      the tracker's ~30 s scrape needs a longer wait than the old Function gateway allowed)
 # The Worker keys, the Google client secret and allow-lists, and the session secret are Netlify environment
 # variables visible to functions only; none is built into the page.
 # There is deliberately no pass-through redirect to any other site.
