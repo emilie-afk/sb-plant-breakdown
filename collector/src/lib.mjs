@@ -277,10 +277,11 @@ export function validateExport(text, period, opts = {}) {
 export function validateMarketExport(text, period, opts = {}) {
   const rows = parseCsv(text);
   if (!rows.length) return { ok: false, problems: ['The ShipStation export is empty.'] };
-  const res = MR.marketParseProductSales(rows);
+  // Store grouping (private) comes from config.local.json shipstation.storeGroups.
+  const res = MR.marketParseProductSales(rows, { storeGroups: opts.storeGroups });
   if (!res.ok) return { ok: false, problems: res.errors };
   const payload = MR.marketPayloadFromParse(res, period, { timeZone: opts.timeZone, currency: opts.currency,
-    client: opts.client, collectedAt: opts.collectedAt });
+    client: opts.client, collectedAt: opts.collectedAt, storeGroups: opts.storeGroups });
   if (!payload.rows.length) return { ok: false, empty: true, problems: ['No market (non-Succulents Box) sales in this period.'] };
   return { ok: true, payload, facts: { rows: payload.rows.length, stores: res.stores.filter(s => !s.own).map(s => s.store),
     marketUnits: res.totals.market.units, marketNet: res.totals.market.net, ownNetDropped: res.totals.own.net,

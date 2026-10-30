@@ -404,14 +404,14 @@
     // Shopify picker counts products instead.
     document.getElementById("shopify-snap-select").innerHTML =
       '<option value="">\u2014 Pick a report \u2014</option>' + snaps.map(function (x) {
-        return '<option value="' + x.id + '"' + (x.id === state.shopify.snapshotId ? " selected" : "") + ">" +
+        return '<option value="' + esc(x.id) + '"' + (x.id === state.shopify.snapshotId ? " selected" : "") + ">" +
                esc(x.label) + " (" + productCount(x) + " products)</option>";
       }).join("");
     document.getElementById("shopify-compare-select").innerHTML =
       '<option value="">\u2014 None \u2014</option>' + snaps.filter(function (x) {
         return x.id !== state.shopify.snapshotId;
       }).map(function (x) {
-        return '<option value="' + x.id + '"' + (x.id === state.shopify.compareId ? " selected" : "") + ">" + esc(x.label) + "</option>";
+        return '<option value="' + esc(x.id) + '"' + (x.id === state.shopify.compareId ? " selected" : "") + ">" + esc(x.label) + "</option>";
       }).join("");
     var snap = currentSnap();
     var bar = document.getElementById("shopify-scopebar");
@@ -837,14 +837,14 @@
     var snaps = snapshotsFor("shopify");
     var sel = document.getElementById("vendors-snap-select");
     sel.innerHTML = '<option value="">— Pick a report —</option>' + snaps.map(function (s) {
-      return '<option value="' + s.id + '"' + (s.id === state.shopify.snapshotId ? " selected" : "") + ">" +
+      return '<option value="' + esc(s.id) + '"' + (s.id === state.shopify.snapshotId ? " selected" : "") + ">" +
              esc(s.label) + " (" + s.products.length + " products)</option>";
     }).join("");
     var csel = document.getElementById("vendors-compare-select");
     csel.innerHTML = '<option value="">— None —</option>' + snaps.filter(function (s) {
       return s.id !== state.shopify.snapshotId;
     }).map(function (s) {
-      return '<option value="' + s.id + '"' + (s.id === state.shopify.compareId ? " selected" : "") + ">" + esc(s.label) + "</option>";
+      return '<option value="' + esc(s.id) + '"' + (s.id === state.shopify.compareId ? " selected" : "") + ">" + esc(s.label) + "</option>";
     }).join("");
 
     var snap = currentSnap();
@@ -1030,17 +1030,8 @@
   // ----------------------------------------------------------
   // DOWNLOADS — always the current scope
   // ----------------------------------------------------------
-  function csvEscape(v) {
-    var s = String(v == null ? "" : v);
-    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-  }
-  function download(name, rows) {
-    var csv = rows.map(function (r) { return r.map(csvEscape).join(","); }).join("\n");
-    var a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }));
-    a.download = name; a.click();
-    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
-  }
+  // One shared encoder for every CSV the dashboard writes (export-safety.js).
+  function download(name, rows) { window.sbDownloadCsv(name, rows); }
   function scopeNote(snap) {
     var m = snap.meta || {};
     return [

@@ -5,11 +5,15 @@
 [build.environment]
   NODE_VERSION = "20"
 
-# Edge proxy to sb-mcg-check API (avoids browser CORS block).
-# Browser calls same-origin /api/mcg/auth and /api/mcg/scrape;
-# Netlify's CDN transparently forwards to sb-mcg-check without invoking any function.
-[[redirects]]
-  from = "/api/mcg/*"
-  to = "https://sb-mcg-check.netlify.app/.netlify/functions/:splat"
-  status = 200
-  force = true
+# Server-side endpoints (same origin as the dashboard):
+#   /api/session       session status / sign out (netlify/functions/session.mjs)
+#   /api/auth/google/* Sign in with Google (auth-google.mjs)
+#   /api/v1/*          allowlisted gateway to the Worker (api-v1.mjs)
+#   /api/stock-tracker stock-tracker data (Edge Function: netlify/edge-functions/stock-tracker.js;
+#                      the tracker's ~30 s scrape needs a longer wait than the old Function gateway allowed)
+# The Worker keys, the Google client secret and allow-lists, and the session secret are Netlify environment
+# variables visible to functions only; none is built into the page.
+# There is deliberately no pass-through redirect to any other site.
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"

@@ -121,9 +121,12 @@ if ($LASTEXITCODE -ne 0) { Write-Host 'FAILED: the deployed Worker did not pass 
 Remove-Variable ingest, viewer
 Write-Host ''
 Write-Host 'All checks passed.' -ForegroundColor Green
-Write-Host 'For the dashboard to load reports by itself, set two Netlify environment variables'
-Write-Host '(Site configuration > Environment variables, scope: Builds), then redeploy:'
-Write-Host "  SB_SHARED_URL = $url"
-Write-Host '  SB_SHARED_KEY = the READ-ONLY viewer key (never the collector or dashboard key). Copy it with:'
+Write-Host 'The dashboard reaches the Worker only through its Netlify functions (server side).'
+Write-Host 'Netlify environment variables (scope: Functions ONLY, never Builds), see docs/security.md:'
+Write-Host "  WORKER_URL           = $url"
+Write-Host '  WORKER_VIEWER_SECRET = the read-only viewer key (sb-pb-viewer)'
+Write-Host '  WORKER_UPLOAD_SECRET / WORKER_SETTINGS_SECRET: run add-gateway-keys.ps1'
+Write-Host 'Copy a key without showing it:'
 Write-Host '    (Get-StoredCredential -Target sb-pb-viewer).GetNetworkCredential().Password | Set-Clipboard'
+Write-Host 'Never set SB_SHARED_URL / SB_SHARED_KEY again: the page must not carry a key.'
 exit 0

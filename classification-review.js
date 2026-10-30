@@ -30,7 +30,9 @@
   //   local   this browser's own, not yet confirmed changes. A local entry
   //           wins over the shared one in this browser only.
   function readJson(k) { try { return JSON.parse(localStorage.getItem(k) || "{}") || {}; } catch (e) { return {}; } }
-  var shared = (function () { var c = readJson(SHARED_CACHE_KEY); return { map: c.map || {}, version: c.version || 0 }; })();
+  // Shared corrections are held in memory only, for the signed-in session
+  // (set after sign-in, wiped at sign-out); they are not written to storage.
+  var shared = { map: {}, version: 0 };
   window.SBOverrides = {
     STORAGE_KEY: OVERRIDE_KEY,
     SHARED_CACHE_KEY: SHARED_CACHE_KEY,
@@ -46,7 +48,6 @@
     sharedVersion: function () { return shared.version; },
     setShared: function (map, version) {
       shared = { map: map && typeof map === "object" ? map : {}, version: version || 0 };
-      try { localStorage.setItem(SHARED_CACHE_KEY, JSON.stringify(shared)); } catch (e) { /* cache only */ }
     },
     save: function (map) {
       try { localStorage.setItem(OVERRIDE_KEY, JSON.stringify(map)); }
