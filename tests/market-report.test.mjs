@@ -16,13 +16,13 @@ const PE = require(path.join(ROOT, 'period-engine.js'));
 
 const CSV = [
   'Store,SKU,Description,Category,QtySold,TotalSales',
-  '"Mountain Crest Gardens (BigC)","S2AA0001","Echeveria \'Sample One\'","","10","69.90"',
-  '"Mountain Crest Gardens (BigC)"," S2AA0002","Sedum Example [large]","","4","35.96"',
-  '"Mountain Crest Gardens (BigC)","","Trailing Replacement ","","50","-120.00"',
-  '"Amazon (MCG)","S2AA0001","Echeveria \'Sample One\'","","3","27.00"',
-  '"Faire (MCG)","TAKM0001-25","Echeveria Bulk Pack (25-50 Plants, 2"" Pots)","","2","85.00"',
-  '"Leaf & Clay (Shopify)","","Mystery Colorful Succulent - 2""","","2","13.98"',
-  '"Leaf & Clay (Shopify)","","CODE20","","5","-25.00"',
+  '"Nursery Alpha (Web)","S2AA0001","Echeveria \'Sample One\'","","10","69.90"',
+  '"Nursery Alpha (Web)"," S2AA0002","Sedum Example [large]","","4","35.96"',
+  '"Nursery Alpha (Web)","","Trailing Replacement ","","50","-120.00"',
+  '"Amazon (Alpha)","S2AA0001","Echeveria \'Sample One\'","","3","27.00"',
+  '"Market Gamma (Alpha)","TAKM0001-25","Echeveria Bulk Pack (25-50 Plants, 2"" Pots)","","2","85.00"',
+  '"Shop Beta (Shopify)","","Mystery Colorful Succulent - 2""","","2","13.98"',
+  '"Shop Beta (Shopify)","","CODE20","","5","-25.00"',
   '"Succulents Box (Shopify)","SB-0001","Our own arrangement","","7","140.00"',
   '"Succulents Box (Shopify)","","OWN10","","3","-12.00"',
   '"Manual Orders","X1","Sample replacement","","1","0.00"'
@@ -47,8 +47,11 @@ test('Succulents Box stores are you, not the market; coupons and adjustments are
   assert.equal(r.totals.market.net, 231.84);
   assert.equal(r.totals.market.units, 22);
   assert.equal(r.totals.all.net, Math.round((231.84 + 140 - 157) * 100) / 100, 'every row is accounted for once');
-  assert.equal(MR.marketStoreGroup('Amazon (MCG)'), 'Mountain Crest Gardens');
-  assert.equal(MR.marketStoreGroup('TEMU (Leaf & Clay)'), 'Leaf & Clay');
+  // Grouping is private configuration (synthetic rules here); without rules a store is its own group.
+  const RULES = [{ match: 'nursery alpha|\\(alpha\\)', group: 'Nursery Alpha' }, { match: 'shop beta', group: 'Shop Beta' }];
+  assert.equal(MR.marketStoreGroup('Amazon (Alpha)', RULES), 'Nursery Alpha');
+  assert.equal(MR.marketStoreGroup('Amazon (Alpha)'), 'Amazon (Alpha)');
+  assert.equal(MR.marketStoreGroup('TEMU (Shop Beta)', RULES), 'Shop Beta');
 });
 
 test('an export with customer or order columns is refused', () => {
@@ -78,12 +81,13 @@ test('the collector payload stores market products only and reconciles to the ce
   const rows = (await call('GET', '/v1/reports/' + encodeURIComponent(reps[0].id) + '/rows', 'v'.repeat(40))).rows;
   assert.equal(rows.find(r => r.title === 'Sedum Example [large]').sku, 'S2AA0002');
   // Back in the dashboard: the External Stores snapshot shape, with actual revenue.
-  const snap = MR.marketExternalSnapshotFromShared(reps[0], rows, { detectGenus: (t) => /Echeveria/.test(t) ? 'Echeveria' : '' });
+  const snap = MR.marketExternalSnapshotFromShared(reps[0], rows, { detectGenus: (t) => /Echeveria/.test(t) ? 'Echeveria' : '',
+    storeGroups: [{ match: 'nursery alpha|\\(alpha\\)', group: 'Nursery Alpha' }] });
   assert.equal(snap.source, 'external');
   assert.equal(snap.products.length, 6, 'adjustments are not products');
   assert.equal(Math.round(snap.products.reduce((t, x) => t + x.estRev, 0) * 100) / 100, 231.84);
   assert.equal(snap.startDate, '2026-09-01'); assert.equal(snap.endDate, '2026-09-30');
-  assert.equal(snap.products.find(x => x.sku === 'S2AA0001' && x.rawStore === 'Amazon (MCG)').store, 'Mountain Crest Gardens');
+  assert.equal(snap.products.find(x => x.sku === 'S2AA0001' && x.rawStore === 'Amazon (Alpha)').store, 'Nursery Alpha');
   // Months combine for quarters exactly like sales reports do.
   const auth = PE.periodAuthoritativeMonths(reps, { source: 'market', scope: 'shipstation_product_sales' });
   assert.ok(auth.months['2026-09']);

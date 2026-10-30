@@ -6,7 +6,9 @@ This is how the product breakdown, vendor analytics, shared storage and the Wind
 
 ```
 node --test tests/*.test.mjs          # no dependencies; uses synthetic fixtures only
-node tools/devserver.mjs 8778         # then open http://127.0.0.1:8778
+bash build.sh                         # builds dist/ and checks it for secrets
+node tools/devserver.mjs --seed --port 8778   # sign in with its fake Google test accounts
+                                      # real functions + Worker in memory, synthetic data; open http://127.0.0.1:8778
 node tools/make-sample-fixtures.mjs   # regenerate the synthetic fixtures
 ```
 
@@ -106,10 +108,10 @@ The "classifications to review" panel lists rows where the imported type disagre
 Shopify's "Product vendor" tells suppliers apart only while each supplier has its own Shopify location. When several suppliers' products move into one shared location, the vendor is taken from the **Products Master** vendor tabs instead (`vendor-master.js`):
 
 - Once a day the collector reads the configured vendor tabs (the sheet's public CSV export) and the store's public catalog (`/products.json`: product id, handle, title, current Shopify vendor, variant SKUs), builds a product → vendor map and stores it in shared storage (`POST /v1/ingest/vendor-map`, setting `vendor_map`). A failure never stops the sales collection; the previous map stays in use.
-- Match order per product: suppliers listed in `keepShopifyVendors` (those not moving) keep the Shopify vendor; then a Products Master link naming the product id or handle; then the variant SKUs found in exactly one vendor's tab; then the Shopify name; then a configured supplier SKU prefix (e.g. `AS-`). Two vendors matching at the same step is a conflict: nothing is chosen.
+- Match order per product: suppliers listed in `keepShopifyVendors` (those not moving) keep the Shopify vendor; then a Products Master link naming the product id or handle; then the variant SKUs found in exactly one vendor's tab; then the Shopify name; then a configured supplier SKU prefix (e.g. `XY-`). Two vendors matching at the same step is a conflict: nothing is chosen.
 - Products the storefront catalog does not show (unpublished, drafts) have no SKUs to match, so the dashboard matches the sales row's product title against the names listed in the tabs (Shopify name, Plant Name, Product), used only when exactly one vendor lists that name.
-- `vendorAliases` shows several Shopify vendor names of one supplier as one vendor (House Plant Wholesale and House Plant Shop are House Plant Dropship); the Shopify name stays in the export.
-- `typeVendors` assigns a product type to one supplier when its products are not listed in any tab (subscriptions are fulfilled by MCG, shown under MCG's Shopify vendor name).
+- `vendorAliases` shows several Shopify vendor names of one supplier as one vendor (for example a supplier's wholesale and shop names); the Shopify name stays in the export.
+- `typeVendors` assigns a product type to one supplier when its products are not listed in any tab (shown under that supplier's Shopify vendor name).
 - Products still unknown (not in the sheet, or a conflict) keep the Shopify vendor.
 - The dashboard applies the map to every report, including history: the vendor is a property of the product. The Shopify vendor is never overwritten; product exports carry **Vendor**, **Shopify vendor** and **Vendor source** columns, and the provenance line says how many products took their vendor from the Products Master and how old the map is.
 - A new map that resolves far fewer products than the stored one (a tab renamed, a column moved) is refused by the Worker unless forced. The sheet id and tab gids are configuration (`vendorMaster` in the collector's `config.local.json`), never in the repository.
@@ -164,7 +166,7 @@ Amazon orders are synced into Shopify through Sellbrite, so Shopify reports can 
 - **Keys.**
   - The collector key may only add reports, record a failed collection and read which periods are stored (dates only).
   - The dashboard key reads, uploads manually and edits shared settings.
-  - The optional viewer key only reads; it is the one built into the encrypted dashboard page.
+  - The viewer key only reads (all revenue history: not harmless). Upload and settings keys each allow one write. All are held by the Netlify functions, never by a browser; see `docs/security.md`.
 - **Re-imports.**
   - A re-upload of identical content is recognised by its content hash and writes nothing.
   - A new upload for the same scope and period is staged, then activated atomically as the next revision.
@@ -187,8 +189,8 @@ See `collector/README.md`. It exports the saved report through the normal report
 | `worker/update-worker.ps1 [-AddOrigin https://…]` | **applies** pending migrations, optionally **adds** a browser origin, **deploys** the Worker, and **creates** the read-only viewer key only if none exists (or re-sets the stored one if the Worker rejects it). Does not rotate the other keys. Ends with `verify-worker.ps1` and exits nonzero if any check fails. |
 | `worker/verify-worker.ps1 -Url https://…` | changes nothing: health ok, `/v1/reports` without a key → 401, the stored viewer key → 200, report-history fields present, viewer writes → 403, collector coverage → 200 |
 | `collector/windows/check-task.ps1` | changes nothing: task state, trigger, next run, last result, and a **verified scheduled run** only when Task Scheduler history ties one instance's time trigger, start, result 0 and completion to a clean collector log; otherwise *not verified* |
-| `node tools/acceptance-live.mjs https://<site>` | changes nothing: a fresh visible Chrome, a person types the site password, then automatic checks of auto-load, history, CSV, quarter/year totals, missing months and reload |
-| Netlify env `SB_SHARED_URL`, `SB_SHARED_KEY` | build the Worker address and the **read-only** viewer key into the encrypted page, so browsers load reports without a key |
+| `node tools/acceptance-live.mjs https://<site>` | changes nothing: a fresh visible Chrome, a person signs in, then automatic checks of auto-load, history, CSV, quarter/year totals, missing months and reload |
+| Netlify env (scope Functions) `WORKER_URL`, `WORKER_*_SECRET`, `SESSION_SECRET`, `GOOGLE_*` (Google sign-in) | server-side only: sign-in and the allowlisted gateway (`docs/security.md`). Nothing is built into the page. |
 | `collector/windows/install-task.ps1 -At HH:mm -Apply` | **installs** the daily scheduled task (without `-Apply` it only prints the proposal; `-Uninstall` removes it) |
 | `collector/windows/run-task.ps1` | what the scheduled task runs: one collection, logged locally |
 | `npm run login` (in `collector/`) | opens a normal browser window for a person to sign in to Shopify once |

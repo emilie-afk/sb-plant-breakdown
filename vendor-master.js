@@ -23,11 +23,11 @@
 //   4. sku       the product's variant SKUs appear in exactly one vendor's tab
 //   5. title     the product title equals a "Shopify name" in exactly one tab
 //   6. prefix    every variant SKU starts with a prefix configured for exactly
-//                one vendor (e.g. "AS-" for Airplant Shop): a supplier's own
+//                one vendor (e.g. "XY-" for a supplier): a supplier's own
 //                SKU convention, for products not yet listed in its tab.
 //                Reported separately so they can be added to the sheet.
 //   7. type      a product type assigned to one supplier by configuration
-//                (typeVendors, e.g. subscriptions are fulfilled by MCG)
+//                (typeVendors, e.g. a product type one supplier fulfils)
 //   otherwise    unresolved (the Shopify vendor is used, and listed for review)
 // Two different vendors matching at the same step is a conflict: nothing is
 // chosen, the Shopify vendor is used, and the product is listed for review.
@@ -128,8 +128,8 @@
     return { index: index, tabs: report };
   }
 
-  // Several Shopify vendor names for one supplier ("House Plant Wholesale" and
-  // "House Plant Shop" are House Plant Dropship) are shown as one vendor.
+  // Several Shopify vendor names for one supplier (e.g. "Supplier Wholesale"
+  // and "Supplier Shop") are shown as one vendor.
   function alias(v, aliases) {
     if (!aliases) return v;
     for (var k in aliases) if (low(k) === low(v)) return txt(aliases[k]);

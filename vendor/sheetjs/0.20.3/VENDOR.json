@@ -1,0 +1,26 @@
+{
+  "name": "SheetJS Community Edition (xlsx)",
+  "version": "0.20.3",
+  "license": "Apache-2.0",
+  "licenseFile": "LICENSE",
+  "officialSource": "https://cdn.sheetjs.com/ (documented as the authoritative source at https://docs.sheetjs.com/docs/getting-started/installation/standalone)",
+  "files": {
+    "xlsx.full.min.js": {
+      "sourceUrl": "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js",
+      "bytes": 951904,
+      "sha256": "cc015130aa8521e7f088f88898eba949ccdcbfb38df0bd129b44b7273c3a6f41",
+      "integrity": "sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT"
+    },
+    "LICENSE": {
+      "sourceUrl": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz (package/LICENSE)",
+      "sha256": "4d2a38ac35cda06a555c84074a819d413339cd3691b822cae50f8f322fe01f64"
+    }
+  },
+  "crossCheck": {
+    "tarballUrl": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "tarballSha256": "8dc73fc3b00203e72d176e85b50938627c7b086e607c682e8d3c22c02bb99fe8",
+    "note": "package/dist/xlsx.full.min.js inside the official tarball is byte-identical to the downloaded file (same sha256)."
+  },
+  "retrieved": "2026-10-29",
+  "replaces": "xlsx 0.18.5 loaded from cdn.jsdelivr.net (published advisories for reading crafted files)"
+}

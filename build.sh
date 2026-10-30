@@ -1,45 +1,30 @@
 #!/usr/bin/env bash
-# Netlify build step:
-#   1. If a shared-storage connection is configured (SB_SHARED_URL /
-#      SB_SHARED_KEY), confirm the key is the Worker's READ-ONLY viewer key
-#   2. Inline the JS files (and that connection) into index.html
-#   3. Run StatiCrypt on the inlined file using APP_PASSWORD
-#   4. Check the output: encrypted, and the key does not appear in plain text
-# The unencrypted intermediate file lives only in a temp folder and is deleted.
+# Netlify build step.
+#   1. Inline the app scripts into one page (inline.js). Nothing secret is
+#      built in: data is reached only through the signed-in same-origin
+#      endpoints (netlify/functions -> server/), which hold the Worker keys.
+#   2. Write dist/_headers: a Content-Security-Policy that allows exactly the
+#      page's own inline scripts (by hash) plus the pinned CDN libraries, and
+#      the usual hardening headers.
+#   3. Check the output: no server secret value, no placeholder, no sheet or
+#      storage location in the static files.
 set -euo pipefail
 
-if [ -z "${APP_PASSWORD:-}" ]; then
-  echo "!!! APP_PASSWORD env var is not set."
-  exit 1
-fi
-
-echo "[1/4] Checking the built-in shared-storage key (must be read-only)..."
-node tools/check-viewer-key.mjs
-
-echo "[2/4] Inlining JS files into index.html..."
-TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
-npm install lz-string@1.5.0 --no-save 2>&1 | tail -3
-node inline.js "$TMP/index.html"
-
-echo "[3/4] Encrypting with StatiCrypt..."
+echo "[1/4] Inlining JS files into index.html..."
 rm -rf dist
 mkdir -p dist
-npx staticrypt "$TMP/index.html" -p "$APP_PASSWORD" --short -d dist
-rm -rf "$TMP"
+npm install lz-string@1.5.0 --no-save 2>&1 | tail -3
+node inline.js dist/index.html
 
-echo "[4/4] Checking the encrypted output..."
-if ! grep -qi "staticrypt" dist/index.html; then
-  echo "!!! dist/index.html does not look like a StatiCrypt page."; exit 1
-fi
-if [ -n "${SB_SHARED_KEY:-}" ] && grep -qF "$SB_SHARED_KEY" dist/index.html; then
-  echo "!!! The shared-storage key appears in plain text in dist/index.html."; exit 1
-fi
-if grep -qF "parseShopifyProductReport" dist/index.html; then
-  echo "!!! dist/index.html contains unencrypted app code."; exit 1
-fi
-echo "    encrypted; no plain-text key or app code"
+echo "[2/4] Verifying and copying vendored libraries (SheetJS)..."
+node tools/verify-vendor.mjs --copy dist
+
+echo "[3/4] Writing security headers..."
+node tools/write-headers.mjs dist
+
+echo "[4/4] Checking the static output for secrets and script sources..."
+node tools/check-static-output.mjs dist
 
 echo ""
-echo "Build complete. Single encrypted file at dist/index.html"
+echo "Build complete:"
 ls -la dist/

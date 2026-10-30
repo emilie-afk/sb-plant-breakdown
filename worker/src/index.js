@@ -1,29 +1,37 @@
 // ============================================================
 // sb-plant-breakdown Worker — shared report store
 //
-// Routes
-//   GET  /v1/health                         no auth
-//   POST /v1/ingest/product-report          INGEST_SECRET (collector) or DASHBOARD_SECRET (manual upload)
-//   POST /v1/ingest/collection-failure      INGEST_SECRET  {source, reportScope, period, errorCode, message}
-//   GET  /v1/ingest/coverage?source=&scope= INGEST_SECRET  stored periods only (dates, revisions), no rows
-//   POST /v1/ingest/vendor-map              INGEST_SECRET or DASHBOARD_SECRET  product -> vendor map from
-//                                           the Products Master (stored as setting "vendor_map")
-//   GET  /v1/reports?source=shopify         DASHBOARD_SECRET or VIEWER_SECRET   (&history=1: every revision)
-//   GET  /v1/reports/:id/rows               DASHBOARD_SECRET or VIEWER_SECRET
-//   GET  /v1/imports?source=&limit=         DASHBOARD_SECRET or VIEWER_SECRET
-//   GET  /v1/settings/:key                  DASHBOARD_SECRET or VIEWER_SECRET
-//   PUT  /v1/settings/:key                  DASHBOARD_SECRET  {value, baseVersion}
+// Routes and who may call them (see ROUTES below; every other path is 404):
+//   GET  /v1/health                          anyone        {ok, service, time} only
+//   POST /v1/ingest/product-report           collector, uploader, dashboard   (uploader/dashboard = manual)
+//   POST /v1/ingest/collection-failure       collector
+//   GET  /v1/ingest/coverage                 collector, dashboard   stored periods only (dates, revisions)
+//   POST /v1/ingest/vendor-map               collector, dashboard   setting "vendor_map"
+//   GET  /v1/reports[?source=&history=1]     viewer, dashboard
+//   GET  /v1/reports/:id/rows                viewer, dashboard
+//   GET  /v1/imports[?source=&limit=]        viewer, dashboard
+//   GET  /v1/settings/:key                   viewer, dashboard      allowlisted keys only
+//   PUT  /v1/settings/:key                   settings, dashboard    {value, baseVersion}
+//   POST /v1/auth/attempt | /v1/auth/success auth                  sign-in attempt counters (atomic)
 //
-// Secrets, set as Cloudflare secrets, never in code or wrangler.toml:
-//   INGEST_SECRET     held by the Windows collector. Can only ADD reports and
-//                     record a failed collection.
-//   DASHBOARD_SECRET  reads, shared settings, and manual uploads.
-//   VIEWER_SECRET     optional, READ-ONLY. Meant to be built into the
-//                     password-protected dashboard so a browser can load the
-//                     saved reports without anyone typing a key.
+// Secrets (Cloudflare secrets, each >= 32 characters; a missing or short one
+// simply grants nothing):
+//   INGEST_SECRET     the Windows collector: adds reports, records failed
+//                     collections, reads stored periods, uploads the vendor map.
+//   VIEWER_SECRET     read-only: reports, rows, import history, settings. Held
+//                     by the Netlify gateway (server side), never by a browser.
+//                     Read-only is not harmless: it exposes revenue history.
+//   UPLOAD_SECRET     manual report uploads only (Netlify gateway, editor sessions).
+//   SETTINGS_SECRET   shared-settings writes only (Netlify gateway, editor sessions).
+//   AUTH_SECRET       sign-in attempt counters only (Netlify gateway); reads nothing.
+//   DASHBOARD_SECRET  administration (all of the above except collector-only
+//                     failure records); for the operator's own tools, kept in
+//                     Windows Credential Manager, never in a browser.
 //
-// Product sales reports only. The ingest route refuses any payload carrying a
-// customer-looking field, and no route stores or returns customer data.
+// CORS is a browser courtesy, not authentication: every route except health
+// checks the bearer key. Product sales reports only: the ingest route refuses
+// any payload carrying a customer-looking field, and no route stores or
+// returns customer data.
 // ============================================================
 import { validateProductReport, contentHash } from "./validate.js";
 import * as store from "./store.js";
@@ -52,14 +60,31 @@ function bearer(req) {
   const m = /^Bearer\s+(.+)$/i.exec(h);
   return m ? m[1].trim() : "";
 }
-// Returns the role a request is authorised for, or null.
+// Returns the role a request is authorised for, or null. A secret shorter
+// than 32 characters is treated as not configured.
+const ROLE_SECRETS = [["dashboard", "DASHBOARD_SECRET"], ["collector", "INGEST_SECRET"], ["viewer", "VIEWER_SECRET"],
+                      ["uploader", "UPLOAD_SECRET"], ["settings", "SETTINGS_SECRET"], ["auth", "AUTH_SECRET"]];
 function roleOf(req, env) {
   const t = bearer(req);
-  if (env.DASHBOARD_SECRET && safeEqual(t, env.DASHBOARD_SECRET)) return "dashboard";
-  if (env.INGEST_SECRET && safeEqual(t, env.INGEST_SECRET)) return "collector";
-  if (env.VIEWER_SECRET && safeEqual(t, env.VIEWER_SECRET)) return "viewer";
+  if (t.length < 32) return null;
+  for (const [role, name] of ROLE_SECRETS) {
+    const s = env[name];
+    if (typeof s === "string" && s.length >= 32 && safeEqual(t, s)) return role;
+  }
   return null;
 }
+const REPORT_ID = /^(shopify|amazon|market):[^:/?#\\\x00-\x1f]{1,120}:\d{4}-\d{2}-\d{2}:\d{4}-\d{2}-\d{2}:r\d{1,6}$/;
+const SOURCE_PARAM = new Set(["shopify", "amazon", "market"]);
+const ALLOWED = {
+  ingestReport: ["collector", "uploader", "dashboard"],
+  failure: ["collector"],
+  coverage: ["collector", "dashboard"],
+  vendorMap: ["collector", "dashboard"],
+  read: ["viewer", "dashboard"],
+  settingsWrite: ["settings", "dashboard"],
+  authAttempts: ["auth"]
+};
+const can = (role, what) => ALLOWED[what].indexOf(role) >= 0;
 
 function corsHeaders(req, env) {
   const origin = req.headers.get("origin") || "";
@@ -74,11 +99,11 @@ function corsHeaders(req, env) {
   };
 }
 
-async function readJson(req) {
+async function readJson(req, max = MAX_BODY) {
   const len = Number(req.headers.get("content-length") || 0);
-  if (len > MAX_BODY) throw Object.assign(new Error("Body too large."), { status: 413, code: "body_too_large" });
+  if (len > max) throw Object.assign(new Error("Body too large."), { status: 413, code: "body_too_large" });
   const text = await req.text();
-  if (text.length > MAX_BODY) throw Object.assign(new Error("Body too large."), { status: 413, code: "body_too_large" });
+  if (text.length > max) throw Object.assign(new Error("Body too large."), { status: 413, code: "body_too_large" });
   try { return JSON.parse(text); }
   catch (e) { throw Object.assign(new Error("Body is not valid JSON."), { status: 400, code: "bad_json" }); }
 }
@@ -90,6 +115,7 @@ async function ingest(req, env, role) {
 
   // A manual upload from the dashboard is always recorded as manual, and a
   // collector upload as collector, whatever the payload claims.
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return json({ ok: false, error: "bad_body" }, 400);
   payload.importedBy = role === "collector" ? "collector" : "manual";
 
   const runId = await store.startRun(env.DB, {
@@ -160,10 +186,13 @@ export default {
 
     const role = roleOf(req, env);
     if (!role) return reply({ ok: false, error: "unauthorized" }, 401);
+    const forbidden = () => reply({ ok: false, error: "forbidden" }, 403);
+    const badParam = () => reply({ ok: false, error: "bad_parameter" }, 400);
+    const p = url.pathname, M = req.method;
 
     try {
-      if (req.method === "POST" && url.pathname === "/v1/ingest/product-report") {
-        if (role === "viewer") return reply({ ok: false, error: "forbidden" }, 403);
+      if (M === "POST" && p === "/v1/ingest/product-report") {
+        if (!can(role, "ingestReport")) return forbidden();
         const res = await ingest(req, env, role);
         Object.entries(cors).forEach(([k, v]) => res.headers.set(k, v));
         return res;
@@ -172,16 +201,16 @@ export default {
       // The collector reports a run that failed BEFORE it had a file to upload
       // (Shopify sign-in needed, export page failed, file refused by its own
       // checks), so the dashboard can say so. Nothing else is written.
-      if (req.method === "POST" && url.pathname === "/v1/ingest/collection-failure") {
-        if (role !== "collector") return reply({ ok: false, error: "forbidden" }, 403);
+      if (M === "POST" && p === "/v1/ingest/collection-failure") {
+        if (!can(role, "failure")) return forbidden();
         return reply(await recordCollectionFailure(req, env));
       }
 
       // The product -> vendor map built by the collector from the Products
       // Master vendor tabs. Replaces the stored map, unless far fewer products
       // resolve than before (a broken read), which is refused without force.
-      if (req.method === "POST" && url.pathname === "/v1/ingest/vendor-map") {
-        if (role !== "collector" && role !== "dashboard") return reply({ ok: false, error: "forbidden" }, 403);
+      if (M === "POST" && p === "/v1/ingest/vendor-map") {
+        if (!can(role, "vendorMap")) return forbidden();
         const body = await readJson(req);
         const v = validateVendorMap(body && body.map);
         if (!v.ok) return reply({ ok: false, error: "invalid_vendor_map", errors: v.errors }, 400);
@@ -195,53 +224,69 @@ export default {
 
       // Which periods are already stored, so the collector can backfill gaps
       // and refresh recent months. Dates and revision numbers only.
-      if (req.method === "GET" && url.pathname === "/v1/ingest/coverage") {
-        if (role !== "collector" && role !== "dashboard") return reply({ ok: false, error: "forbidden" }, 403);
-        return reply({ ok: true, coverage: await store.coverage(env.DB, {
-          source: url.searchParams.get("source") || "shopify",
-          scope: url.searchParams.get("scope") || "total_sales_by_product"
-        }) });
+      if (M === "GET" && p === "/v1/ingest/coverage") {
+        if (!can(role, "coverage")) return forbidden();
+        const src = url.searchParams.get("source") || "shopify";
+        const scope = url.searchParams.get("scope") || "total_sales_by_product";
+        if (!SOURCE_PARAM.has(src) || !/^[a-z0-9_]{1,80}$/.test(scope)) return badParam();
+        return reply({ ok: true, coverage: await store.coverage(env.DB, { source: src, scope }) });
       }
 
-      // Everything below reads data, or (PUT settings) is dashboard-only. The
-      // collector key can add reports and nothing else.
-      if (role === "collector") return reply({ ok: false, error: "forbidden" }, 403);
-      const readOnly = req.method === "GET";
-      if (!readOnly && role !== "dashboard") return reply({ ok: false, error: "forbidden" }, 403);
-
-      if (req.method === "GET" && url.pathname === "/v1/reports") {
-        return reply({ ok: true, reports: await store.listReports(env.DB, {
-          source: url.searchParams.get("source") || null, history: url.searchParams.get("history") === "1"
-        }) });
+      // Sign-in attempt counters for the Netlify gateway (AUTH_SECRET only).
+      if (M === "POST" && (p === "/v1/auth/attempt" || p === "/v1/auth/success")) {
+        if (!can(role, "authAttempts")) return forbidden();
+        const b = await readJson(req, 1024);
+        const client = b && typeof b.client === "string" ? b.client : "";
+        const windowSec = Number(b && b.windowSec);
+        if (!/^[A-Za-z0-9_-]{16,64}$/.test(client) || !Number.isInteger(windowSec) || windowSec < 60 || windowSec > 86400) return badParam();
+        const fn = p === "/v1/auth/attempt" ? store.reserveAttempt : store.releaseAttempt;
+        return reply(Object.assign({ ok: true }, await fn(env.DB, { client, windowSec, now: Date.now() })));
       }
-      let m = /^\/v1\/reports\/([^/]+)\/rows$/.exec(url.pathname);
-      if (req.method === "GET" && m) {
-        const r = await store.reportRows(env.DB, decodeURIComponent(m[1]), {
-          offset: url.searchParams.get("offset"), limit: url.searchParams.get("limit")
-        });
+
+      if (M === "GET" && p === "/v1/reports") {
+        if (!can(role, "read")) return forbidden();
+        const src = url.searchParams.get("source");
+        if (src != null && !SOURCE_PARAM.has(src)) return badParam();
+        return reply({ ok: true, reports: await store.listReports(env.DB, { source: src || null, history: url.searchParams.get("history") === "1" }) });
+      }
+      let m = /^\/v1\/reports\/([^/]+)\/rows$/.exec(p);
+      if (M === "GET" && m) {
+        if (!can(role, "read")) return forbidden();
+        let id; try { id = decodeURIComponent(m[1]); } catch (e) { return badParam(); }
+        if (!REPORT_ID.test(id)) return badParam();
+        const r = await store.reportRows(env.DB, id, { offset: url.searchParams.get("offset"), limit: url.searchParams.get("limit") });
         if (!r) return reply({ ok: false, error: "not_found" }, 404);
         return reply({ ok: true, status: r.status, rows: r.rows });
       }
-      if (req.method === "GET" && url.pathname === "/v1/imports") {
-        return reply({ ok: true, imports: await store.listRuns(env.DB, {
-          source: url.searchParams.get("source") || null, limit: url.searchParams.get("limit")
-        }) });
+      if (M === "GET" && p === "/v1/imports") {
+        if (!can(role, "read")) return forbidden();
+        const src = url.searchParams.get("source");
+        if (src != null && !SOURCE_PARAM.has(src)) return badParam();
+        return reply({ ok: true, imports: await store.listRuns(env.DB, { source: src || null, limit: url.searchParams.get("limit") }) });
       }
-      m = /^\/v1\/settings\/([a-z_]+)$/.exec(url.pathname);
+      m = /^\/v1\/settings\/([a-z_]{1,40})$/.exec(p);
       if (m && store.SETTING_KEYS.has(m[1])) {
-        if (req.method === "GET") {
+        if (M === "GET") {
+          if (!can(role, "read")) return forbidden();
           return reply({ ok: true, setting: await store.getSetting(env.DB, m[1]) });
         }
-        if (req.method === "PUT") {
-          const body = await readJson(req);
+        if (M === "PUT") {
+          if (!can(role, "settingsWrite")) return forbidden();
+          if (m[1] === "vendor_map") return reply({ ok: false, error: "use_vendor_map_route" }, 400);
+          const body = await readJson(req, store.MAX_SETTING_BYTES + 4096);
           if (!body || typeof body !== "object" || !("value" in body)) return reply({ ok: false, error: "bad_body" }, 400);
-          const r = await store.putSetting(env.DB, m[1], body.value, body.baseVersion, body.updatedBy || "dashboard");
+          const problem = store.checkSettingValue(m[1], body.value);
+          if (problem) return reply({ ok: false, error: "invalid_setting", message: problem }, 400);
+          const by = role === "settings" ? "dashboard (editor)" : String(body.updatedBy || "dashboard").slice(0, 60);
+          const r = await store.putSetting(env.DB, m[1], body.value, body.baseVersion, by);
           return reply(r, r.ok ? 200 : 409);
         }
       }
       return reply({ ok: false, error: "not_found" }, 404);
     } catch (e) {
-      return reply({ ok: false, error: e.code || "server_error", message: e.status ? e.message : undefined }, e.status || 500);
+      // Known request errors keep their short message; anything else is a bare
+      // code, so no internal detail (SQL, stack, values) leaves the Worker.
+      return reply({ ok: false, error: e.status ? (e.code || "bad_request") : "server_error", message: e.status ? e.message : undefined }, e.status || 500);
     }
   }
 };

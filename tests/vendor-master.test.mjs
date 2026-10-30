@@ -21,14 +21,14 @@ const PG = require(path.join(ROOT, 'product-grouping.js'));
 const CSV = {
   giftA: 'Product,Cost,SKUs,Shopify Name,Shopify Link\nBox One,10,"GA-ONE\nGA-ONE-DLX",Sample Gift Box One,https://admin.example/store/x/products/1001\nBox Two,12,GA-TWO,Sample Gift Box Two,\n',
   arr:   'Product,SB SKU,SB Product Link\n"Small Heart\n\nSample Heart Arrangement",ARR-HEART,https://shop.example/products/sample-heart\n',
-  plants:'STT,Plant Name,MCG SKU,SB Bundles SKU\n1,Echeveria Sample,M1000,M1000+POT1\n2,Haworthia Sample,M2000,\n',
+  plants:'STT,Plant Name,Supplier SKU,SB Bundles SKU\n1,Echeveria Sample,M1000,M1000+POT1\n2,Haworthia Sample,M2000,\n',
   hpd:   'No.,Plant Name,HD SKU\n1,Fern Sample,4_FERN_SAMPLE\n',
   root:  'Root,,,Store,\nTitle,SKU,Cost,Title,SKU\nPink Plant,LR_PINK_6,20,Pink Plant (store),4_FERN_SAMPLE\n'
 };
 const TAB_SPECS = [
   { label: 'Gifts A', vendor: 'Gift Vendor A', sku: ['SKUs'], name: ['Shopify Name'], link: ['Shopify Link'], csv: CSV.giftA },
   { label: 'Arrangements', vendor: 'Arrangement Co', sku: ['SB SKU'], name: ['Product'], link: ['SB Product Link'], csv: CSV.arr, skuPrefix: ['ARR-'] },
-  { label: 'Plants', vendor: 'Main Store', sku: ['MCG SKU', 'SB Bundles SKU'], name: ['Plant Name'], csv: CSV.plants },
+  { label: 'Plants', vendor: 'Main Store', sku: ['Supplier SKU', 'SB Bundles SKU'], name: ['Plant Name'], csv: CSV.plants },
   { label: 'Houseplants', vendor: 'Dropship House', sku: ['HD SKU'], name: ['Plant Name'], csv: CSV.hpd },
   { label: 'Root Cost', vendor: 'Root Vendor', sku: ['SKU#1'], name: ['Title#1'], csv: CSV.root }
 ];

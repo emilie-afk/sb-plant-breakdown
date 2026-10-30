@@ -210,17 +210,10 @@
   // ----------------------------------------------------------
   // CSV — always the complete filtered set, never the painted page
   // ----------------------------------------------------------
-  function csvEscape(v) {
-    var s = String(v == null ? "" : v);
-    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-  }
-  function download(name, rows) {
-    var csv = rows.map(function (r) { return r.map(csvEscape).join(","); }).join("\n");
-    var a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }));
-    a.download = name; a.click();
-    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
-  }
+  // One shared encoder for every CSV the dashboard writes (export-safety.js).
+  function csvEscape(v) { return ES().sbCsvCell(v); }
+  function download(name, rows) { ES().sbDownloadCsv(name, rows); }
+  function ES() { return (root && root.sbCsvCell) ? root : (typeof require === "function" ? require("./export-safety.js") : null); }
   // Build CSV rows from the same column specs the table uses.
   // Numeric columns are written as plain numbers — a spreadsheet should get
   // -34.5, not "-$34.50" — while an em dash for "nothing to compare" becomes
