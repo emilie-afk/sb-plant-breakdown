@@ -24,7 +24,7 @@ const env = (over = {}) => ({ DB: makeD1(path.join(ROOT, 'worker', 'migrations')
 async function call(e, method, p, key, body, headers = {}) {
   const h = { 'content-type': 'application/json', ...headers }; if (key) h.authorization = 'Bearer ' + key;
   const r = await worker.fetch(new Request('https://w.example' + p, { method, headers: h, body: body === undefined ? undefined : JSON.stringify(body) }), e);
-  let j = null; try { j = await r.json(); } catch {} return { status: r.status, json: j };
+  let j = null; try { j = await r.json(); } catch {} return { status: r.status, json: j, headers: r.headers };
 }
 const ID = encodeURIComponent('shopify:total_sales_by_product:2026-09-01:2026-09-30:r1');
 
@@ -117,4 +117,34 @@ test('the viewer key keeps exactly its earlier access', async () => {
   const v = (await call(e, 'GET', '/v1/reports', K.VIEWER_SECRET)).json.reports[0];
   assert.equal(v.source_filename, 'PRIVATE-FILE-NAME.csv');
   assert.equal((await call(e, 'POST', '/v1/ingest/product-report', K.VIEWER_SECRET, payload())).status, 403);
+});
+
+test('rotation: REPORTING_SECRET_NEXT reads alongside the current key; a collision with another role grants nothing', async () => {
+  const oldKey = 'r'.repeat(40), newKey = 'n'.repeat(40);
+  const first = env({ REPORTING_SECRET: undefined, REPORTING_SECRET_NEXT: newKey });
+  assert.equal((await call(first, 'GET', '/v1/reports', newKey)).status, 200, 'a first rotation can start with no current key');
+  const e = env({ REPORTING_SECRET: oldKey, REPORTING_SECRET_NEXT: newKey });
+  assert.equal((await call(e, 'GET', '/v1/reports', oldKey)).status, 200);
+  assert.equal((await call(e, 'GET', '/v1/reports', newKey)).status, 200);
+  assert.equal((await call(e, 'GET', '/v1/settings/market_config', newKey)).status, 403, 'the next key is reporting only');
+  const promoted = env({ REPORTING_SECRET: newKey, REPORTING_SECRET_NEXT: newKey });
+  assert.equal((await call(promoted, 'GET', '/v1/reports', newKey)).status, 200, 'equal current and next keys are one role');
+  const done = env({ REPORTING_SECRET: newKey });
+  assert.equal((await call(done, 'GET', '/v1/reports', oldKey)).status, 401, 'the old key is revoked');
+  for (const name of ['DASHBOARD_SECRET', 'VIEWER_SECRET', 'INGEST_SECRET', 'UPLOAD_SECRET', 'SETTINGS_SECRET', 'AUTH_SECRET']) {
+    const c = env({ REPORTING_SECRET_NEXT: K[name] });
+    assert.equal((await call(c, 'GET', '/v1/reports', K[name])).status, 401, `${name} equal to the next key grants nothing`);
+  }
+});
+
+test('rotation: reporting responses name the slot that matched (1, 2 or both); other roles get no slot header', async () => {
+  const a = 'r'.repeat(40), b = 'n'.repeat(40);
+  const e = env({ REPORTING_SECRET: a, REPORTING_SECRET_NEXT: b });
+  await call(e, 'POST', '/v1/ingest/product-report', K.INGEST_SECRET, payload());
+  assert.equal((await call(e, 'GET', '/v1/reports', a)).headers.get('x-reporting-key-slot'), '1');
+  assert.equal((await call(e, 'GET', '/v1/reports', b)).headers.get('x-reporting-key-slot'), '2');
+  assert.equal((await call(e, 'GET', `/v1/reports/${ID}/rows?offset=0&limit=5`, b)).headers.get('x-reporting-key-slot'), '2');
+  assert.equal((await call(env({ REPORTING_SECRET: a, REPORTING_SECRET_NEXT: a }), 'GET', '/v1/reports', a)).headers.get('x-reporting-key-slot'), '1,2');
+  assert.equal((await call(e, 'GET', '/v1/reports', K.VIEWER_SECRET)).headers.get('x-reporting-key-slot'), null);
+  assert.equal((await call(e, 'GET', '/v1/reports', 'x'.repeat(40))).headers.get('x-reporting-key-slot'), null);
 });

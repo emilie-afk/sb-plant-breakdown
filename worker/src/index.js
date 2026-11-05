@@ -26,7 +26,8 @@
 //   AUTH_SECRET       sign-in attempt counters only (Netlify gateway); reads nothing.
 //   REPORTING_SECRET  the Marketing Dashboard's server: saved reports, their rows and import history,
 //                     read-only, without file names, client labels or error text; no settings.
-//                     Revoke with `wrangler secret delete REPORTING_SECRET`.
+//                     Revoke with `wrangler secret delete REPORTING_SECRET` (and REPORTING_SECRET_NEXT, which
+//                     holds the new key only while a rotation is in progress).
 // A bearer equal to two or more of these secrets grants nothing: every secret must be different.
 //   DASHBOARD_SECRET  administration (all of the above except collector-only
 //                     failure records); for the operator's own tools, kept in
@@ -68,10 +69,18 @@ function bearer(req) {
 // than 32 characters is treated as not configured.
 const ROLE_SECRETS = [["dashboard", "DASHBOARD_SECRET"], ["collector", "INGEST_SECRET"], ["viewer", "VIEWER_SECRET"],
                       ["uploader", "UPLOAD_SECRET"], ["settings", "SETTINGS_SECRET"], ["auth", "AUTH_SECRET"],
-                      ["reporting", "REPORTING_SECRET"]];
+                      ["reporting", "REPORTING_SECRET"], ["reporting", "REPORTING_SECRET_NEXT"]];
 // Every credential must be distinct. A bearer that matches more than one configured secret is ambiguous and
 // grants nothing (fail closed): e.g. a reporting key accidentally set equal to the dashboard key reads no
 // settings and administers nothing, and the dashboard value stops working until the collision is fixed.
+function reportingSlots(req, env) {
+  const t = bearer(req), slots = [];
+  ["REPORTING_SECRET", "REPORTING_SECRET_NEXT"].forEach((name, i) => {
+    const s = env[name];
+    if (typeof s === "string" && s.length >= 32 && safeEqual(t, s)) slots.push(String(i + 1));
+  });
+  return slots.join(",");
+}
 function roleOf(req, env) {
   const t = bearer(req);
   if (t.length < 32) return null;
@@ -80,7 +89,9 @@ function roleOf(req, env) {
     const s = env[name];
     if (typeof s === "string" && s.length >= 32 && safeEqual(t, s)) matches.push(role);
   }
-  return matches.length === 1 ? matches[0] : null;
+  // REPORTING_SECRET_NEXT exists only during a key rotation; matching both reporting keys is still one role.
+  const roles = new Set(matches);
+  return roles.size === 1 ? matches[0] : null;
 }
 // What the reporting role sees: no source file names, client host labels or error text.
 const forReporting = (role, list, drop) => role !== "reporting" ? list : list.map(o => {
@@ -200,6 +211,9 @@ export default {
 
     const role = roleOf(req, env);
     if (!role) return reply({ ok: false, error: "unauthorized" }, 401);
+    // Which reporting slot(s) matched ("1", "2" or "1,2"): a key rotation uses it to tell where the dashboard's live
+    // key is. A slot number is not secret.
+    if (role === "reporting") cors["x-reporting-key-slot"] = reportingSlots(req, env);
     const forbidden = () => reply({ ok: false, error: "forbidden" }, 403);
     const badParam = () => reply({ ok: false, error: "bad_parameter" }, 400);
     const p = url.pathname, M = req.method;
