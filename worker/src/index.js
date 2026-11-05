@@ -7,9 +7,9 @@
 //   POST /v1/ingest/collection-failure       collector
 //   GET  /v1/ingest/coverage                 collector, dashboard   stored periods only (dates, revisions)
 //   POST /v1/ingest/vendor-map               collector, dashboard   setting "vendor_map"
-//   GET  /v1/reports[?source=&history=1]     viewer, dashboard
-//   GET  /v1/reports/:id/rows                viewer, dashboard
-//   GET  /v1/imports[?source=&limit=]        viewer, dashboard
+//   GET  /v1/reports[?source=&history=1]     viewer, dashboard, reporting
+//   GET  /v1/reports/:id/rows                viewer, dashboard, reporting
+//   GET  /v1/imports[?source=&limit=]        viewer, dashboard, reporting
 //   GET  /v1/settings/:key                   viewer, dashboard      allowlisted keys only
 //   PUT  /v1/settings/:key                   settings, dashboard    {value, baseVersion}
 //   POST /v1/auth/attempt | /v1/auth/success auth                  sign-in attempt counters (atomic)
@@ -24,6 +24,10 @@
 //   UPLOAD_SECRET     manual report uploads only (Netlify gateway, editor sessions).
 //   SETTINGS_SECRET   shared-settings writes only (Netlify gateway, editor sessions).
 //   AUTH_SECRET       sign-in attempt counters only (Netlify gateway); reads nothing.
+//   REPORTING_SECRET  the Marketing Dashboard's server: saved reports, their rows and import history,
+//                     read-only, without file names, client labels or error text; no settings.
+//                     Revoke with `wrangler secret delete REPORTING_SECRET`.
+// A bearer equal to two or more of these secrets grants nothing: every secret must be different.
 //   DASHBOARD_SECRET  administration (all of the above except collector-only
 //                     failure records); for the operator's own tools, kept in
 //                     Windows Credential Manager, never in a browser.
@@ -63,16 +67,25 @@ function bearer(req) {
 // Returns the role a request is authorised for, or null. A secret shorter
 // than 32 characters is treated as not configured.
 const ROLE_SECRETS = [["dashboard", "DASHBOARD_SECRET"], ["collector", "INGEST_SECRET"], ["viewer", "VIEWER_SECRET"],
-                      ["uploader", "UPLOAD_SECRET"], ["settings", "SETTINGS_SECRET"], ["auth", "AUTH_SECRET"]];
+                      ["uploader", "UPLOAD_SECRET"], ["settings", "SETTINGS_SECRET"], ["auth", "AUTH_SECRET"],
+                      ["reporting", "REPORTING_SECRET"]];
+// Every credential must be distinct. A bearer that matches more than one configured secret is ambiguous and
+// grants nothing (fail closed): e.g. a reporting key accidentally set equal to the dashboard key reads no
+// settings and administers nothing, and the dashboard value stops working until the collision is fixed.
 function roleOf(req, env) {
   const t = bearer(req);
   if (t.length < 32) return null;
+  const matches = [];
   for (const [role, name] of ROLE_SECRETS) {
     const s = env[name];
-    if (typeof s === "string" && s.length >= 32 && safeEqual(t, s)) return role;
+    if (typeof s === "string" && s.length >= 32 && safeEqual(t, s)) matches.push(role);
   }
-  return null;
+  return matches.length === 1 ? matches[0] : null;
 }
+// What the reporting role sees: no source file names, client host labels or error text.
+const forReporting = (role, list, drop) => role !== "reporting" ? list : list.map(o => {
+  const c = Object.assign({}, o); for (const k of drop) delete c[k]; return c;
+});
 const REPORT_ID = /^(shopify|amazon|market):[^:/?#\\\x00-\x1f]{1,120}:\d{4}-\d{2}-\d{2}:\d{4}-\d{2}-\d{2}:r\d{1,6}$/;
 const SOURCE_PARAM = new Set(["shopify", "amazon", "market"]);
 const ALLOWED = {
@@ -81,6 +94,7 @@ const ALLOWED = {
   coverage: ["collector", "dashboard"],
   vendorMap: ["collector", "dashboard"],
   read: ["viewer", "dashboard"],
+  report: ["viewer", "dashboard", "reporting"],
   settingsWrite: ["settings", "dashboard"],
   authAttempts: ["auth"]
 };
@@ -244,14 +258,15 @@ export default {
       }
 
       if (M === "GET" && p === "/v1/reports") {
-        if (!can(role, "read")) return forbidden();
+        if (!can(role, "report")) return forbidden();
         const src = url.searchParams.get("source");
         if (src != null && !SOURCE_PARAM.has(src)) return badParam();
-        return reply({ ok: true, reports: await store.listReports(env.DB, { source: src || null, history: url.searchParams.get("history") === "1" }) });
+        const reports = await store.listReports(env.DB, { source: src || null, history: url.searchParams.get("history") === "1" });
+        return reply({ ok: true, reports: forReporting(role, reports, ["source_filename", "imported_by"]) });
       }
       let m = /^\/v1\/reports\/([^/]+)\/rows$/.exec(p);
       if (M === "GET" && m) {
-        if (!can(role, "read")) return forbidden();
+        if (!can(role, "report")) return forbidden();
         let id; try { id = decodeURIComponent(m[1]); } catch (e) { return badParam(); }
         if (!REPORT_ID.test(id)) return badParam();
         const r = await store.reportRows(env.DB, id, { offset: url.searchParams.get("offset"), limit: url.searchParams.get("limit") });
@@ -259,10 +274,11 @@ export default {
         return reply({ ok: true, status: r.status, rows: r.rows });
       }
       if (M === "GET" && p === "/v1/imports") {
-        if (!can(role, "read")) return forbidden();
+        if (!can(role, "report")) return forbidden();
         const src = url.searchParams.get("source");
         if (src != null && !SOURCE_PARAM.has(src)) return badParam();
-        return reply({ ok: true, imports: await store.listRuns(env.DB, { source: src || null, limit: url.searchParams.get("limit") }) });
+        const imports = await store.listRuns(env.DB, { source: src || null, limit: url.searchParams.get("limit") });
+        return reply({ ok: true, imports: forReporting(role, imports, ["error_message", "client", "imported_by"]) });
       }
       m = /^\/v1\/settings\/([a-z_]{1,40})$/.exec(p);
       if (m && store.SETTING_KEYS.has(m[1])) {
