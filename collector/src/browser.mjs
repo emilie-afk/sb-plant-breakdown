@@ -99,6 +99,21 @@ export async function waitForPerson(page, minutes, onWaiting) {
 }
 
 // ---- the export ----
+// Opens the "Export report" dialog from whichever header layout the page has.
+export async function openExportDialog(page) {
+  const headerExport = page.getByRole('button', { name: /^Export$/ });
+  if (await headerExport.count() === 1) { await headerExport.click({ timeout: 30000 }); return 'header'; }
+  // The live page also holds a zero-size copy of this button, so only visible ones count.
+  const more = page.getByRole('button', { name: /^More actions$/ }).filter({ visible: true });
+  if (await more.count() !== 1) throw new Error('Export not found: expected one Export button or one "More actions" menu on the report page, found ' + await headerExport.count() + ' and ' + await more.count() + '.');
+  await more.click({ timeout: 30000 });
+  const item = page.getByRole('menuitem', { name: /^Export$/ }).filter({ visible: true });
+  await item.first().waitFor({ state: 'visible', timeout: 10000 });
+  if (await item.count() !== 1) throw new Error('Expected one visible Export item in the "More actions" menu, found ' + await item.count() + '.');
+  await item.click({ timeout: 10000 });
+  return 'menu';
+}
+
 // Opens the saved report with the period's query, reads the Summary row off
 // the page, exports "All results" as CSV and returns the file text plus the
 // page totals, so the file can be checked against what Shopify showed.
@@ -121,19 +136,15 @@ export async function exportReport(page, url, { timeoutMs = 120000 } = {}) {
     totals = { units: parseSummaryNumber(pageTotals.cells[base]), net: parseSummaryNumber(pageTotals.cells[base + 4]) };
   }
 
-  // Shopify draws these controls with its own web components. Verified on the
-  // live report page: the header holds exactly one
-  // <s-internal-button>Export</s-internal-button> inside <s-internal-page>, and
-  // the dialog is <s-internal-modal heading="Export report"> containing the
-  // format / scope radios and its own Export and Cancel buttons. "Export" also
-  // appears in a menu and the table toolbar, so every target is scoped.
-  // The <s-internal-button> hosts have no box of their own (display:contents);
-  // the clickable element is the <button> inside each one's shadow root, which
-  // is what getByRole finds. With the dialog closed exactly one is visible
-  // (verified with Playwright against the report page).
-  const headerExport = page.getByRole('button', { name: /^Export$/ });
-  if (await headerExport.count() !== 1) throw new Error('Expected one visible Export button on the report page, found ' + await headerExport.count() + '.');
-  await headerExport.click({ timeout: 30000 });
+  // Shopify draws these controls with its own web components. Up to early
+  // Nov 2026 the header held one <s-internal-button>Export</s-internal-button>.
+  // Shopify then moved Export into the header's "More actions" menu (items:
+  // Rename, Export, Print, Delete; verified on the live report page 2026-11-23).
+  // Both layouts are handled: a visible header Export button is used if there
+  // is exactly one, otherwise "More actions" is opened and its Export menu item
+  // clicked. Nothing else in the menu is ever touched. The dialog
+  // <s-internal-modal heading="Export report"> is unchanged.
+  await openExportDialog(page);
   const modal = page.locator('s-internal-modal[heading="Export report"][open]');
   await modal.waitFor({ state: 'attached', timeout: 15000 });
   await modal.getByRole('radio', { name: /Comma Separated Values/i }).check({ timeout: 10000 });
