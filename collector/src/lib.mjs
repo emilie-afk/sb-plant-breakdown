@@ -50,6 +50,7 @@ export function previousPeriod(start, end) {
 //   previous-month : the last full month (collected on any day of the next month)
 //   month-to-date  : the 1st of this month through yesterday (skipped on the 1st)
 //   last-full-day  : yesterday only
+//   last-week      : the last finished Saturday–Friday week
 export function planPeriods(kinds, now = new Date(), tz = STORE_TZ) {
   const today = ymdInZone(now, tz);
   const yesterday = addDays(today, -1);
@@ -64,6 +65,9 @@ export function planPeriods(kinds, now = new Date(), tz = STORE_TZ) {
       if (start <= yesterday) out.push({ kind: k, start, end: yesterday });
     } else if (k === 'last-full-day') {
       out.push({ kind: k, start: yesterday, end: yesterday });
+    } else if (k === 'last-week') {
+      const w = finishedWeek(1, now, tz);
+      out.push({ kind: k, start: w.start, end: w.end });
     } else throw new Error(`Unknown period kind "${k}".`);
   }
   return out.map(p => Object.assign(p, { comparison: previousPeriod(p.start, p.end) }));
@@ -77,6 +81,17 @@ export function closedMonth(back, now = new Date(), tz = STORE_TZ) {
   const key = `${y}-${String(m).padStart(2, '0')}`;
   const end = `${key}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0')}`;
   return { kind: back === 1 ? 'previous-month' : 'closed-month', start: key + '-01', end, comparison: previousPeriod(key + '-01', end) };
+}
+
+// The Saturday–Friday week `back` weeks ago, counting the last finished one as 1
+// (store calendar). On a Saturday, the week that ended yesterday is finished.
+export function finishedWeek(back, now = new Date(), tz = STORE_TZ) {
+  const today = ymdInZone(now, tz);
+  const dow = new Date(today + 'T00:00:00Z').getUTCDay();          // 0 Sun … 5 Fri, 6 Sat
+  const lastFriday = addDays(today, -(((dow - 5) + 7) % 7 || 7));
+  const end = addDays(lastFriday, -7 * (back - 1));
+  const start = addDays(end, -6);
+  return { kind: 'week', start, end, comparison: previousPeriod(start, end) };
 }
 
 // How closed months are kept current (configurable; nothing here is assumed
@@ -109,6 +124,14 @@ export function periodsForToday(cfg, now = new Date()) {
   const wantPrev = (s.daily || []).includes('previous-month');
   const lookback = rule.onDays.includes(dom) ? rule.lookback : (wantPrev ? 1 : 0);
   for (let b = 1; b <= Math.max(lookback, wantPrev ? 1 : 0); b++) out.push(closedMonth(b, now, tz));
+  // periods.weeks.count: also collect the last N finished Saturday–Friday weeks, so
+  // weekly views have a report with exactly those dates. Off unless configured.
+  // A week already planned with the same dates (e.g. a month-to-date) is not repeated.
+  const weeks = Number(s.weeks && s.weeks.count) || 0;
+  for (let b = 1; b <= weeks; b++) {
+    const w = finishedWeek(b, now, tz);
+    if (!out.some(p => p.start === w.start && p.end === w.end)) out.push(w);
+  }
   return out;
 }
 
@@ -320,6 +343,10 @@ export function validateConfig(cfg) {
     const c = P.closedMonths;
     if (!Number.isInteger(c.lookback) || c.lookback < 0 || c.lookback > 12) errs.push('periods.closedMonths.lookback must be 0–12.');
     if (!Array.isArray(c.onDays) || c.onDays.some(d => !Number.isInteger(d) || d < 1 || d > 28)) errs.push('periods.closedMonths.onDays must be days 1–28.');
+  }
+  if (P.weeks != null) {
+    const n = P.weeks && P.weeks.count;
+    if (!Number.isInteger(n) || n < 0 || n > 8) errs.push('periods.weeks.count must be 0–8.');
   }
   if (P.backfill != null) {
     if (!/^\d{4}-\d{2}$/.test(String(P.backfill.earliest || ''))) errs.push('periods.backfill.earliest must be YYYY-MM.');

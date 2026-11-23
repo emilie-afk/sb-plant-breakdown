@@ -56,6 +56,31 @@ test('recently closed months are re-collected on the configured days', () => {
   assert.deepEqual(L.closedMonthRule({ periods: { monthlyOnDay: 2 } }), { lookback: 1, onDays: [2] }, 'old configs keep their meaning');
 });
 
+test('weekly periods: the last finished Saturday–Friday weeks, store calendar, off by default', () => {
+  // Mon Nov 23 2026 (store time): last finished week is Sat Nov 14 – Fri Nov 20.
+  const mon = new Date('2026-11-23T18:00:00Z');
+  assert.deepEqual(L.finishedWeek(1, mon), { kind: 'week', start: '2026-11-14', end: '2026-11-20', comparison: { start: '2026-11-07', end: '2026-11-13' } });
+  assert.deepEqual([L.finishedWeek(2, mon).start, L.finishedWeek(2, mon).end], ['2026-11-07', '2026-11-13']);
+  // Friday: that week is still running, so the previous one is the last finished.
+  assert.equal(L.finishedWeek(1, new Date('2026-11-20T18:00:00Z')).end, '2026-11-13');
+  // Saturday: the week that ended yesterday is finished.
+  assert.equal(L.finishedWeek(1, new Date('2026-11-21T18:00:00Z')).end, '2026-11-20');
+  // Early Saturday UTC is still Friday in Los Angeles.
+  assert.equal(L.finishedWeek(1, new Date('2026-11-21T06:00:00Z')).end, '2026-11-13');
+  const base = { periods: { daily: ['month-to-date'], closedMonths: { lookback: 0, onDays: [] } } };
+  assert.deepEqual(L.periodsForToday(base, mon).map(p => p.kind), ['month-to-date'], 'no weeks unless configured');
+  const cfg = { periods: { ...base.periods, weeks: { count: 2 } } };
+  assert.deepEqual(L.periodsForToday(cfg, mon).map(p => [p.kind, p.start, p.end]),
+    [['month-to-date', '2026-11-01', '2026-11-22'], ['week', '2026-11-14', '2026-11-20'], ['week', '2026-11-07', '2026-11-13']]);
+  // Sat Aug 8 2026: month-to-date is Aug 1–7, the same dates as the week, so it is planned once.
+  assert.deepEqual(L.periodsForToday(cfg, new Date('2026-08-08T18:00:00Z')).map(p => [p.kind, p.start]),
+    [['month-to-date', '2026-08-01'], ['week', '2026-07-25']]);
+  assert.deepEqual(L.planPeriods(['last-week'], mon).map(p => [p.start, p.end]), [['2026-11-14', '2026-11-20']]);
+  const ok = { adminUrl: 'https://admin.shopify.com/store/demo', reportId: '1' };
+  assert.deepEqual(L.validateConfig({ ...ok, periods: { weeks: { count: 4 } } }), []);
+  for (const bad of [{ count: 9 }, { count: -1 }, { count: 1.5 }, {}]) assert.ok(L.validateConfig({ ...ok, periods: { weeks: bad } }).some(e => /weeks\.count/.test(e)));
+});
+
 test('backfill plans missing complete months, newest first, within limits', () => {
   const now = new Date('2026-10-16T18:00:00Z');
   const cov = [
