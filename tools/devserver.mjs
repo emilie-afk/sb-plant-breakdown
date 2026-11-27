@@ -5,7 +5,8 @@
 // (Node SQLite + the real migrations) and an in-memory session store.
 // Optionally seeds SYNTHETIC reports from tests/fixtures.
 //
-//   node tools/devserver.mjs [--port 8899] [--seed] [--settings dir] [--dev-controls]
+//   node tools/devserver.mjs [--port 8899] [--seed] [--seed-market-periods] [--settings dir] [--dev-controls]
+//   (--dev-controls: /__dev/control?failRevoke=1 | delayRowsMs=N | failMarketRows=1)
 //
 // Sign-in uses a FAKE Google (OpenID Connect) provider built in here, served
 // from http://localhost:<port>/__fake-google/ (a different site from the
@@ -55,7 +56,7 @@ const env = {
 const baseStore = memoryStore();
 // --dev-controls: test hooks (never in the Netlify functions): make the next
 // revocations fail, or delay report-row answers, via GET /__dev/control?...
-const DEV = { failRevoke: false, delayRowsMs: 0, on: process.argv.includes('--dev-controls') };
+const DEV = { failRevoke: false, delayRowsMs: 0, failMarketRows: false, on: process.argv.includes('--dev-controls') };
 const store = { get: (k) => baseStore.get(k), delete: (k) => baseStore.delete(k),
   set: async (k, v) => { if (DEV.failRevoke && k.startsWith('revoked/')) throw new Error('simulated storage failure'); return baseStore.set(k, v); } };
 const workerFetch = (u, init) => String(u).startsWith('https://worker.local') ? worker.fetch(new Request(u, init), wenv) : fetch(u, init);
@@ -147,6 +148,40 @@ if (process.argv.includes('--seed')) {
   await wcall('POST', '/v1/ingest/collection-failure', K.INGEST_SECRET, { source: 'shopify', errorCode: 'sign_in_needed', message: 'Shopify sign-in needed (synthetic)', period: { start: '2026-10-01', end: '2026-10-27' } });
   console.log('Seeded 3 synthetic Shopify and market months (with hostile text) and one collection failure.');
 }
+// --seed-market-periods: SYNTHETIC market reports in the shapes External Stores
+// must handle — two Saturday–Friday weeks, two overlapping month-to-date copies,
+// a week with no product sales (adjustments only: a reported zero) — and two
+// market collections that failed and were not redone.
+if (process.argv.includes('--seed-market-periods')) {
+  const require = createRequire(import.meta.url);
+  const MR = require(path.join(ROOT, 'market-report.js'));
+  const H = ['Store', 'SKU', 'Description', 'Category', 'QtySold', 'TotalSales'];
+  const shapes = [
+    ['2026-11-07', '2026-11-13', 1.0], ['2026-11-14', '2026-11-20', 0.9],
+    ['2026-10-01', '2026-10-15', 1.6], ['2026-10-01', '2026-10-18', 1.9], ['2026-10-24', '2026-10-30', 0]
+  ];
+  for (const [start, end, f] of shapes) {
+    const lines = f ? [H,
+      ['Nursery Alpha (Web)', 'S2AA0001', "Echeveria 'Sample One'", '', Math.round(60 * f), (420 * f).toFixed(2)],
+      ['Nursery Alpha (Web)', 'S2AA0007', 'Haworthia Sample Seven', '', Math.round(22 * f), (176 * f).toFixed(2)],
+      ['Amazon (Alpha)', 'S2AA0001', "Echeveria 'Sample One'", '', Math.round(18 * f), (153 * f).toFixed(2)],
+      ['Shop Beta (Shopify)', 'B-0042', 'Sedum Example [large]', '', Math.round(30 * f), (240 * f).toFixed(2)],
+      ['Shop Beta (Shopify)', 'B-0050', 'Free replacement plant', '', 4, '0.00'],
+      ['Market Gamma', 'G-1001', 'Crassula Sample Mix', '', Math.round(14 * f), (98 * f).toFixed(2)],
+      ['Shop Beta (Shopify)', '', 'CODE10', '', 3, '-12.00']]
+      : [H, ['Shop Beta (Shopify)', '', 'Return adjustment', '', 1, '-8.00']];
+    const parsed = MR.marketParseProductSales(lines.map(l => l.map(String)), { storeGroups: [] });
+    if (!parsed.ok) { console.error('market period seed parse', parsed.errors); continue; }
+    const payload = MR.marketPayloadFromParse(parsed, { start, end }, { timeZone: 'America/Los_Angeles', currency: 'USD', client: 'devserver', collectedAt: new Date().toISOString() });
+    const r = await wcall('POST', '/v1/ingest/product-report', K.INGEST_SECRET, payload);
+    if (!r.ok) console.error('market period seed failed', start, end, r.error, (r.errors || []).slice(0, 3));
+  }
+  for (const [start, end, code] of [['2026-10-01', '2026-10-31', 'unknown_page'], ['2026-11-01', '2026-11-24', 'export_failed']]) {
+    await wcall('POST', '/v1/ingest/collection-failure', K.INGEST_SECRET, { source: 'market', reportScope: 'shipstation_product_sales', errorCode: code,
+      message: 'synthetic failure', period: { start, end } });
+  }
+  console.log('Seeded synthetic market weeks, overlapping month-to-date copies, a reported-zero week and two failed market collections.');
+}
 const sdir = arg('settings');
 if (sdir) for (const k of ['restricted_items', 'market_config']) {
   const f = path.join(sdir, k + '.json');
@@ -166,10 +201,15 @@ http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || "localhost:" + port}`);
     if (DEV.on && url.pathname === '/__dev/control') {
       if (url.searchParams.has('failRevoke')) DEV.failRevoke = url.searchParams.get('failRevoke') === '1';
+      if (url.searchParams.has('failMarketRows')) DEV.failMarketRows = url.searchParams.get('failMarketRows') === '1';
       if (url.searchParams.has('delayRowsMs')) DEV.delayRowsMs = Math.min(60000, Number(url.searchParams.get('delayRowsMs')) || 0);
       res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify(DEV));
     }
     if (url.pathname.startsWith('/__fake-google/')) return await fakeGoogle(url, req, res);
+    // Simulated outage of market report rows (for the no-automatic-retry check).
+    if (DEV.failMarketRows && /^\/api\/v1\/reports\/market[^/]*\/rows$/.test(decodeURIComponent(url.pathname))) {
+      res.writeHead(502, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ ok: false, error: 'simulated' }));
+    }
     if (DEV.delayRowsMs && /^\/api\/v1\/reports\/.+\/rows$/.test(url.pathname)) await new Promise(r => setTimeout(r, DEV.delayRowsMs));
     if (url.pathname.startsWith('/api/')) {
       const chunks = []; for await (const c of req) chunks.push(c);

@@ -87,7 +87,7 @@
     });
     DI.reports = null; DI.runs = null; DI.history = null; DI.error = null; DI.results = {};
     AUTO.status = "idle"; AUTO.error = null; AUTO.current = null; AUTO.fullMonth = null; AUTO.collection = null;
-    AUTO.marketCollection = null; AUTO.reports = null; AUTO.checkedAt = null; AUTO.userPicked = false;
+    AUTO.marketCollection = null; AUTO.marketFailures = null; AUTO.reports = null; AUTO.checkedAt = null; AUTO.userPicked = false;
     window.SBVendorMap = null;
     window.SBMarketConfig = null;
     if (typeof window.setRestrictedItems === "function") window.setRestrictedItems(null);
@@ -107,7 +107,9 @@
   async function fetchRows(rep) {
     var rows = [], offset = 0, page;
     do {
-      page = (await api("/v1/reports/" + encodeURIComponent(rep.id) + "/rows?offset=" + offset + "&limit=5000")).body.rows || [];
+      var res = await api("/v1/reports/" + encodeURIComponent(rep.id) + "/rows?offset=" + offset + "&limit=5000");
+      if (res.status !== 200) throw new Error("shared storage answered HTTP " + res.status + ".");
+      page = res.body.rows || [];
       rows = rows.concat(page); offset += page.length;
     } while (page.length === 5000);
     if (rows.length !== rep.row_count) throw new Error("Expected " + rep.row_count + " rows, received " + rows.length + ".");
@@ -196,6 +198,8 @@
       AUTO.reports = reports;
       AUTO.collection = window.sharedCollectionStatus(runs, { source: "shopify" });
       AUTO.marketCollection = window.sharedCollectionStatus(runs, { source: "market" });
+      // External Stores lists market collections that failed and have not been redone (market-period.js).
+      AUTO.marketFailures = window.marketOutstandingFailures ? window.marketOutstandingFailures(runs) : [];
       AUTO.checkedAt = new Date().toISOString();
       if (!pick.current) { AUTO.status = "none"; AUTO.current = null; afterAuto(); return; }
       var cur = await ensureAutoLoaded(pick.current);

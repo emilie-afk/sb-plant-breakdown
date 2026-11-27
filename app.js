@@ -580,6 +580,9 @@ function buildComparison(curProds, priProds){
 const fmt$ = v => '$' + (Math.abs(v||0)).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmt$signed = v => (v >= 0 ? '+' : '-') + '$' + Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmtN = v => (v||0).toLocaleString('en-US');
+// A count the report does not carry (ShipStation Product Sales has no orders): "—", never 0.
+const fmtNk = v => v == null ? '—' : fmtN(v);
+const fmt$k = v => v == null ? '—' : fmt$(v);
 const pctFmt = v => (v*100).toFixed(2) + '%';
 function fmtAxis(v){
   if (v >= 1000) return '$' + (v/1000).toFixed(v >= 10000 ? 0 : 1) + 'k';
@@ -2127,6 +2130,11 @@ function parseShipStation(rows, filename) {
 
 // Aggregate ShipStation products by store (deduping orders for accurate rev)
 function aggregateExternalByStore(products, groupByParent) {
+  // Automatic market data (ShipStation Product Sales): real item revenue per
+  // line, no order count (market-period.js). Uploaded order CSVs below.
+  if (products.length && products.every(p => p.revenueIsActual) && typeof marketStoreTotals === 'function') {
+    return marketStoreTotals(products, groupByParent);
+  }
   const map = {}, seen = {};
   for (const p of products) {
     const key = groupByParent ? p.store : p.rawStore;
@@ -2161,7 +2169,7 @@ function aggregateExternalByGenus(products) {
   }
   return Object.values(map).map(g => ({
     genus: g.genus, units: g.units, estRev: g.estRev,
-    orders: g.orderSet.size, skus: g.skuSet.size, items: g.items
+    orders: g.items.some(p => p.revenueIsActual) ? null : g.orderSet.size, skus: g.skuSet.size, items: g.items
   })).sort((a, b) => b.units - a.units);
 }
 
@@ -2176,12 +2184,13 @@ function aggregateExternalByPlant(products) {
     map[t].estRev += p.estRev;
     map[t].orderSet.add(p.orderId);
     map[t].storeSet.add(p.store);
+    if (p.revenueIsActual) map[t].actual = true;
     if (!map[t].sku && p.sku) map[t].sku = p.sku;
   }
   return Object.values(map).map(p => ({
     title: p.title, sku: p.sku, genus: p.genus,
     units: p.units, estRev: p.estRev,
-    orders: p.orderSet.size, storeCount: p.storeSet.size
+    orders: p.actual ? null : p.orderSet.size, storeCount: p.storeSet.size
   })).sort((a, b) => b.units - a.units);
 }
 
@@ -2208,14 +2217,17 @@ function renderExternal() {
   const cmpSnap = s.compareId ? snapshots.find(x => x.id === s.compareId) : null;
   const cmpProducts = cmpSnap ? cmpSnap.products : null;
   const cmpBanner = cmpSnap ? ` &nbsp;<span class="badge" style="background:#fff3e0;color:#e65100">vs ${H(cmpSnap.label)}</span>` : '';
-  document.getElementById('external-mode-banner').innerHTML =
-    `<strong>${H(snap.label)}</strong> · ${products.length.toLocaleString()} line items · uploaded ${new Date(snap.uploadedAt).toLocaleDateString()}${cmpBanner}
+  const mk = !!(snap.meta && snap.meta.market);
+  document.getElementById('external-mode-banner').innerHTML = mk
+    ? `<strong>${H(snap.label)}</strong> · ${products.length.toLocaleString()} product lines · collected ${H(snap.meta.collectedAt ? new Date(snap.meta.collectedAt).toLocaleString() : '—')}${cmpBanner}
+     &nbsp; <span class="small">Market signal — never summed with your Amazon/Shopify totals.</span>`
+    : `<strong>${H(snap.label)}</strong> · ${products.length.toLocaleString()} line items · uploaded ${new Date(snap.uploadedAt).toLocaleDateString()}${cmpBanner}
      &nbsp; <span class="small">Market signal — never summed with your Amazon/Shopify totals.</span>`;
 
   // Store aggregation
   const byStore = aggregateExternalByStore(products, s.groupByParent);
   const cmpByStore = cmpProducts ? aggregateExternalByStore(cmpProducts, s.groupByParent) : null;
-  renderExternalSummaryCards(byStore, products, cmpByStore, cmpProducts);
+  renderExternalSummaryCards(byStore, products, cmpByStore, cmpProducts, mk);
   renderExternalFocusCards(byStore, cmpByStore);
   renderExternalOtherStores(byStore);
   renderExternalStoreFilter(byStore);
@@ -2251,24 +2263,27 @@ function fmtDelta(cur, prior, fmt) {
   return ` <span class="delta ${cls}" style="font-size:11px;font-weight:600;color:${d>0?'#2e7d32':d<0?'#c62828':'#666'}">${arrow} ${pctTxt} <span style="opacity:.7">(${sign}${abs})</span></span>`;
 }
 
-function renderExternalSummaryCards(byStore, products, cmpByStore, cmpProducts) {
-  const totalRev = byStore.reduce((a, s) => a + s.rev, 0);
+function renderExternalSummaryCards(byStore, products, cmpByStore, cmpProducts, actual) {
+  const totalRev = Math.round(byStore.reduce((a, s) => a + s.rev, 0) * 100) / 100;
   const totalUnits = byStore.reduce((a, s) => a + s.units, 0);
-  const totalOrders = byStore.reduce((a, s) => a + s.orders, 0);
+  const sumOrders = list => list.some(s => s.orders == null) ? null : list.reduce((a, s) => a + s.orders, 0);
+  // ShipStation Product Sales carries no order count: "—" even when nothing sold.
+  const totalOrders = actual ? null : sumOrders(byStore);
   const genera = new Set(products.map(p => p.genus).filter(g => g && g !== '(no genus)')).size;
   let priorRev = null, priorUnits = null, priorOrders = null, priorStores = null, priorGenera = null;
   if (cmpByStore) {
     priorRev    = cmpByStore.reduce((a, s) => a + s.rev, 0);
     priorUnits  = cmpByStore.reduce((a, s) => a + s.units, 0);
-    priorOrders = cmpByStore.reduce((a, s) => a + s.orders, 0);
+    priorOrders = actual ? null : sumOrders(cmpByStore);
     priorStores = cmpByStore.length;
     priorGenera = new Set(cmpProducts.map(p => p.genus).filter(g => g && g !== '(no genus)')).size;
   }
   const cards = [
-    {label: 'Market revenue (est.)', value: fmt$(totalRev), delta: fmtDelta(totalRev, priorRev, fmt$),
-       sub: '<span class="small">not your revenue</span>'},
+    {label: actual ? 'Market revenue' : 'Market revenue (est.)', value: fmt$(totalRev), delta: fmtDelta(totalRev, priorRev, fmt$),
+       sub: '<span class="small">' + (actual ? 'actual item revenue · ' : '') + 'not your revenue</span>'},
     {label: 'Units observed',  value: fmtN(totalUnits),  delta: fmtDelta(totalUnits,  priorUnits,  fmtN)},
-    {label: 'Orders observed', value: fmtN(totalOrders), delta: fmtDelta(totalOrders, priorOrders, fmtN)},
+    {label: 'Orders observed', value: fmtNk(totalOrders), delta: totalOrders == null || priorOrders == null ? '' : fmtDelta(totalOrders, priorOrders, fmtN),
+       sub: totalOrders == null ? '<span class="small">not in ShipStation Product Sales</span>' : ''},
     {label: 'External stores', value: fmtN(byStore.length), delta: fmtDelta(byStore.length, priorStores, fmtN)},
     {label: 'Plant genera',    value: fmtN(genera),      delta: fmtDelta(genera, priorGenera, fmtN)}
   ];
@@ -2317,16 +2332,16 @@ function renderStoreCard(s, isFocus, prior) {
   const topGenera = genera.filter(g => g.genus !== '(no genus)').slice(0, 3);
   const topGeneraTxt = topGenera.map(g => `${H(g.genus)} (${g.units})`).join(', ') || '—';
   const dRev = prior ? fmtDelta(s.rev, prior.rev, fmt$) : '';
-  const dOrd = prior ? fmtDelta(s.orders, prior.orders, fmtN) : '';
+  const dOrd = prior && s.orders != null && prior.orders != null ? fmtDelta(s.orders, prior.orders, fmtN) : '';
   const dUn  = prior ? fmtDelta(s.units, prior.units, fmtN) : '';
-  const dAov = prior ? fmtDelta(s.aov, prior.aov, fmt$) : '';
+  const dAov = prior && s.aov != null && prior.aov != null ? fmtDelta(s.aov, prior.aov, fmt$) : '';
   return `<div class="card store-card ${isFocus ? 'focus' : ''}">
     <div style="font-weight:600;font-size:14px;color:#e65100;margin-bottom:6px">${H(s.store)}</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px">
       <div><div class="small">Revenue</div><div style="font-weight:600">${fmt$(s.rev)}</div>${dRev}</div>
-      <div><div class="small">Orders</div><div style="font-weight:600">${fmtN(s.orders)}</div>${dOrd}</div>
+      <div><div class="small">Orders</div><div style="font-weight:600">${fmtNk(s.orders)}</div>${dOrd}</div>
       <div><div class="small">Units</div><div style="font-weight:600">${fmtN(s.units)}</div>${dUn}</div>
-      <div><div class="small">AOV</div><div style="font-weight:600">${fmt$(s.aov)}</div>${dAov}</div>
+      <div><div class="small">AOV</div><div style="font-weight:600">${fmt$k(s.aov)}</div>${dAov}</div>
     </div>
     <div class="small" style="margin-top:8px"><strong>Top:</strong> ${topGeneraTxt}</div>
   </div>`;
@@ -2369,7 +2384,7 @@ function renderExternalGenusTable(genera, cmpGenera) {
     {key: 'type', label: 'Type'},
     {key: 'units', label: 'Units', num: true, fmt: fmtN},
     {key: 'estRev', label: 'Est. revenue', num: true, fmt: fmt$},
-    {key: 'orders', label: 'Orders', num: true, fmt: fmtN},
+    {key: 'orders', label: 'Orders', num: true, fmt: fmtNk},
     {key: 'skus', label: 'SKUs', num: true, fmt: fmtN}
   ];
   if (hasCmp) {
@@ -2433,7 +2448,7 @@ function renderExternalTopPlants(products) {
     {key: 'sku', label: 'SKU', num: false},
     {key: 'units', label: 'Units', num: true, fmt: fmtN},
     {key: 'estRev', label: 'Est. rev', num: true, fmt: fmt$},
-    {key: 'orders', label: 'Orders', num: true, fmt: fmtN},
+    {key: 'orders', label: 'Orders', num: true, fmt: fmtNk},
     {key: 'storeCount', label: 'Stores', num: true, fmt: fmtN}
   ];
   const tp = state.topPlants.external;
@@ -2469,7 +2484,7 @@ function renderExternalDrill(genus, genera) {
     {key: 'title', label: 'Plant'}, {key: 'sku', label: 'SKU'},
     {key: 'units', label: 'Units', num: true, fmt: fmtN},
     {key: 'estRev', label: 'Est. rev', num: true, fmt: fmt$},
-    {key: 'orders', label: 'Orders', num: true, fmt: fmtN},
+    {key: 'orders', label: 'Orders', num: true, fmt: fmtNk},
     {key: 'storeCount', label: 'Stores', num: true, fmt: fmtN}
   ];
   // Sort per user selection (default col 2 = Units, desc)
@@ -2508,7 +2523,9 @@ function renderExternalInsights(snap, byStore, genera) {
   if (byStore.length) {
     const top = byStore[0];
     cards.push({icon: '🏪', title: 'Biggest external footprint',
-      body: `<strong>${H(top.store)}</strong> — ${fmt$(top.rev)} across ${fmtN(top.orders)} orders (${fmtN(top.units)} units). AOV ${fmt$(top.aov)}.`});
+      body: top.orders == null
+        ? `<strong>${H(top.store)}</strong> — ${fmt$(top.rev)} from ${fmtN(top.units)} units.`
+        : `<strong>${H(top.store)}</strong> — ${fmt$(top.rev)} across ${fmtN(top.orders)} orders (${fmtN(top.units)} units). AOV ${fmt$(top.aov)}.`});
   }
   // Insight: top genus overall
   const topGenera = genera.filter(g => g.genus !== '(no genus)').slice(0, 3);
